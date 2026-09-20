@@ -1,0 +1,35 @@
+{
+  "id": "meshpincer",
+  "name": "MeshPincer",
+  "description": "Operate a MeshCore companion radio through MeshPincer.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "socketPath": {
+        "type": "string",
+        "description": "Path to the meshpincerd Unix-domain socket."
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "meshcore_status",
+      "meshcore_messages",
+      "meshcore_send",
+      "meshcore_repeater_status",
+      "meshcore_repeater_configure"
+    ]
+  },
+  "toolMetadata": {
+    "meshcore_send": {
+      "optional": true
+    },
+    "meshcore_repeater_configure": {
+      "optional": true
+    }
+  }
+}
