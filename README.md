@@ -55,5 +55,4 @@ connection and repeater administration are the next implementation milestone.
 
 ## Project status
 
-Early development. The repository is private while the first hardware-backed
-MVP is built and verified.
+Early development. The first hardware-backed MVP is being built and verified.
