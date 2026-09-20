@@ -7,15 +7,15 @@ designed for two related jobs:
 
 1. operator tools that let an authorized OpenClaw conversation inspect and act
    on a MeshCore network; and
-2. a future native MeshCore channel that lets radio peers converse with an
-   OpenClaw agent.
+2. a native MeshCore channel that lets radio peers converse with an OpenClaw
+   agent.
 
 ## Architecture
 
 ```text
 MeshCore RF <-> companion radio <-> meshpincerd <-> OpenClaw plugin
                                       |               |-- operator tools
-                                      |               `-- MeshCore channel (planned)
+                                      |               `-- MeshCore channel
                                       `-- SQLite event and message store
 ```
 
