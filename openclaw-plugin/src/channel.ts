@@ -344,7 +344,11 @@ function escapeRegex(text: string): string {
 export function privateChannelInvocation(text: string, nodeName: string): string | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized || !nodeName.trim()) return undefined;
-  const mention = new RegExp(`(?:^|\\s)@${escapeRegex(nodeName.trim())}(?=$|[\\s,:])`, "i");
+  const escapedName = escapeRegex(nodeName.trim());
+  const mention = new RegExp(
+    `(?:^|\\s)@(?:${escapedName}(?=$|[\\s,:])|\\[${escapedName}\\](?=$|[\\s,:]))`,
+    "i",
+  );
   const match = mention.exec(normalized);
   if (!match) return undefined;
   const body = normalized.slice(match.index + match[0].length).replace(/^[\s,:-]+/, "").trim();

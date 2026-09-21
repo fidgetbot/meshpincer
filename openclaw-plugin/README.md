@@ -43,7 +43,8 @@ identified by its complete public key, and inbound peers must be listed under
 `channels.meshcore.allowDirectFrom`. Private group slots must be listed under
 `channels.meshcore.allowChannelIndices`; slot 0 (`Public`) is always read-only.
 Private group traffic starts an agent turn only when it explicitly mentions the
-runtime node name, such as `@Fidget status?`. Channel sender labels are
+runtime node name, such as `@Fidget status?` or the MeshCore app form
+`@[Fidget] status?`. Channel sender labels are
 unverified and channel turns cannot authorize commands or administration.
 The channel uses a consumer cursor separate from the operator inbox and, by
 default, baselines a new installation at the latest recorded event so old radio

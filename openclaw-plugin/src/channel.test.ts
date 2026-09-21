@@ -89,6 +89,9 @@ describe("MeshCore native channel", () => {
     expect(privateChannelInvocation("NVM-P: @Fidget status?", "Fidget")).toBe(
       "status?",
     );
+    expect(
+      privateChannelInvocation("NVM-P: @[Fidget] status?", "Fidget"),
+    ).toBe("status?");
     expect(privateChannelInvocation("@runtime-node: ping", "runtime-node")).toBe(
       "ping",
     );
