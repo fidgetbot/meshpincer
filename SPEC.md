@@ -221,8 +221,10 @@ message and delivered through the daemon's acknowledged zero-hop send path.
 The first live inbound DM created the expected stable OpenClaw conversation and
 produced an RF reply. That test also proved that a generic delivery-recovery
 message can waste airtime when an ACK is uncertain, so native replies now keep
-timeout diagnostics local and do not automatically resend. Configured MeshCore
-group-channel conversations remain to be implemented.
+timeout diagnostics local and do not automatically resend. A final post-fix
+hardware test produced exactly one 13-byte `MeshPincer OK` reply, recorded a
+matching acknowledgement, and emitted no recovery notice or retry. Configured
+MeshCore group-channel conversations remain to be implemented.
 
 ## Verification requirements
 

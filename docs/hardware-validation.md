@@ -114,5 +114,13 @@ guides agents toward at most 75 UTF-8 bytes for ordinary replies. With the
 five-byte direct-message text header, 75 bytes fills exactly five AES blocks;
 76 bytes requires a sixth block.
 
+A final post-fix acceptance test sent `Reply exactly: MeshPincer OK` from the
+allowlisted companion. OpenClaw generated and MeshPincer transmitted exactly
+`MeshPincer OK` (13 UTF-8 bytes). The daemon recorded one queued event, one
+transmitted event, and a matching acknowledgement less than one second after
+transmission. No recovery notice, oversized fallback, duplicate, or automatic
+retry followed. This closes the concise native direct-message reply and
+restart-recovery suppression cases.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.
