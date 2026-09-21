@@ -97,9 +97,10 @@ Secrets are references or device-held values, not message-database columns.
 - Send test messages and correlate acknowledgements
 
 Status as of 2026-09-20: USB discovery and read-only device, radio, contact,
-channel, and statistics queries have been proven on a Wio Tracker L1 Pro.
-Receive/persistence and RF send/acknowledgement acceptance remain open. See
-[`docs/hardware-validation.md`](docs/hardware-validation.md).
+channel, statistics, and GNSS queries have been proven on a Wio Tracker L1 Pro.
+The Seattle network profile was applied and verified across a fresh serial
+connection. Receive/persistence and RF send/acknowledgement acceptance remain
+open. See [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ### M2 — operator tools
 

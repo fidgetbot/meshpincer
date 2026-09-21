@@ -20,10 +20,19 @@ Observed results:
 - the configured radio parameters were 869.618 MHz, 62.5 kHz bandwidth, SF8,
   CR5, and 22 dBm transmit power.
 
-No radio transmission or configuration mutation was performed. The observed
-869.618 MHz configuration is outside the US 902–928 MHz ISM band, so transmit
-acceptance testing remains blocked until the device's physical country and the
-target MeshCore network profile are confirmed.
+No radio transmission or configuration mutation was performed during the
+read-only inventory. The observed 869.618 MHz configuration was outside the US
+902–928 MHz ISM band, so RF testing was paused.
+
+The device location was subsequently confirmed as Seattle, Washington, and the
+target network profile was supplied as 910.525 MHz, 62.5 kHz bandwidth, SF7,
+and CR5. Those four parameters were applied through the companion protocol and
+read back successfully after a fresh serial connection. Transmit power remains
+unchanged at 22 dBm.
+
+The companion's self-telemetry also returned a GNSS location consistent with
+Seattle's Capitol Hill neighborhood. No advert or mesh message was transmitted
+during configuration or GNSS validation.
 
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.
