@@ -12,6 +12,25 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_STATE_DIR` — state and SQLite directory
 - `MESHPINCER_SOCKET` — Unix-domain socket path
 - `MESHPINCER_SERIAL_PORT` — optional explicit serial port override
+- `MESHPINCER_USB_VID` and `MESHPINCER_USB_PID` — USB identity, accepting
+  decimal or `0x` notation (defaults target the Wio Tracker L1)
+- `MESHPINCER_USB_SERIAL` — optional hardware serial used to disambiguate
+  multiple matching radios; it is not exposed by the API
+- `MESHPINCER_QUERY_TIMEOUT` — companion command timeout in seconds
+- `MESHPINCER_REFRESH_INTERVAL` — read-only snapshot interval in seconds
+- `MESHPINCER_RECONNECT_INITIAL` and `MESHPINCER_RECONNECT_MAX` — reconnect
+  backoff bounds in seconds
 
-When no serial override is set, hardware discovery will select and verify the
-configured MeshCore companion node. Hardware integration is the next milestone.
+When no serial override is set, discovery matches the configured USB identity
+and fails closed if more than one radio matches without a configured hardware
+serial.
+
+Implemented read-only endpoints:
+
+- `GET /v1/status`
+- `GET /v1/contacts`
+- `GET /v1/channels` (configured channels only)
+- `GET /v1/channels?include_empty=true` (all device slots)
+
+The API never returns channel secrets, USB hardware serials, or stored contact
+coordinates.

@@ -7,26 +7,35 @@ from fastapi import FastAPI, HTTPException, Query
 from . import __version__
 from .config import Settings
 from .models import (
+    ChannelRecord,
+    ContactRecord,
     MessageRecord,
-    RadioStatus,
     RepeaterConfigRequest,
     SendMessageRequest,
     SendMessageResult,
     ServiceStatus,
 )
+from .radio import RadioManager
 from .store import Store
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    radio_manager: RadioManager | None = None,
+) -> FastAPI:
     resolved = settings or Settings.from_env()
     store = Store(resolved.database_path)
-    radio = RadioStatus(serial_port=resolved.serial_port)
+    radio = radio_manager or RadioManager(resolved)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         resolved.state_dir.mkdir(parents=True, exist_ok=True)
         await store.initialize()
-        yield
+        await radio.start()
+        try:
+            yield
+        finally:
+            await radio.stop()
 
     app = FastAPI(title="MeshPincer", version=__version__, lifespan=lifespan)
 
@@ -34,9 +43,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def status() -> ServiceStatus:
         return ServiceStatus(
             version=__version__,
-            radio=radio,
+            radio=await radio.status(),
             last_event_id=await store.last_event_id(),
         )
+
+    @app.get("/v1/contacts", response_model=list[ContactRecord])
+    async def contacts() -> list[ContactRecord]:
+        return await radio.contacts()
+
+    @app.get("/v1/channels", response_model=list[ChannelRecord])
+    async def channels(include_empty: bool = False) -> list[ChannelRecord]:
+        return await radio.channels(include_empty=include_empty)
 
     @app.get("/v1/messages", response_model=list[MessageRecord])
     async def messages(

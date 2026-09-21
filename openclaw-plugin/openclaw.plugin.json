@@ -19,6 +19,8 @@
     "tools": [
       "meshcore_status",
       "meshcore_messages",
+      "meshcore_contacts",
+      "meshcore_channels",
       "meshcore_send",
       "meshcore_repeater_status",
       "meshcore_repeater_configure"

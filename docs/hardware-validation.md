@@ -38,5 +38,15 @@ Changing the companion's device/advert name and reading it back after a fresh
 serial connection was also proven. The chosen name is device configuration;
 MeshPincer remains name-agnostic and discovers it through self-info at runtime.
 
+The first packaged `meshpincerd` hardware slice was then exercised over its
+Unix-domain socket. Stable USB matching selected the attached radio, the daemon
+completed its read-only snapshot, and `GET /v1/status`, `GET /v1/contacts`, and
+both configured-only and all-slot `GET /v1/channels` queries returned expected
+data. The TypeScript client used by the OpenClaw tools read the same live status
+and channel data. Graceful shutdown released the serial connection.
+
+This validation did not send an advert or mesh message. The live API output was
+also checked to ensure it contains no channel secret or USB hardware serial.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

@@ -8,6 +8,7 @@ dependencies = [
   "aiosqlite>=0.21,<1",
   "fastapi>=0.116,<1",
   "meshcore>=2.3.14,<3",
+  "pyserial>=3.5,<4",
   "uvicorn>=0.35,<1",
 ]
 

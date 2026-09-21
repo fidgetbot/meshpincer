@@ -42,6 +42,28 @@ export default defineToolPlugin({
       },
     }),
     tool({
+      name: "meshcore_contacts",
+      description: "List contacts known to the connected MeshCore companion radio.",
+      parameters: Type.Object({}),
+      execute: async (_params, config) => {
+        const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        return { response: await client.get("/v1/contacts") };
+      },
+    }),
+    tool({
+      name: "meshcore_channels",
+      description: "List configured MeshCore channels or all device channel slots.",
+      parameters: Type.Object({
+        includeEmpty: Type.Optional(Type.Boolean()),
+      }),
+      execute: async ({ includeEmpty = false }, config) => {
+        const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        return {
+          response: await client.get(`/v1/channels?include_empty=${String(includeEmpty)}`),
+        };
+      },
+    }),
+    tool({
       name: "meshcore_send",
       description: "Send a direct or channel message over MeshCore.",
       parameters: Type.Object({

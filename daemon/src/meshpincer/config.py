@@ -9,11 +9,23 @@ def _default_state_dir() -> Path:
     return Path.home() / ".openclaw" / "state" / "meshpincer"
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    return default if value is None else int(value, 0)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     state_dir: Path
     socket_path: Path
     serial_port: str | None = None
+    usb_vid: int = 0x2886
+    usb_pid: int = 0x1667
+    usb_serial: str | None = None
+    query_timeout_seconds: float = 5.0
+    refresh_interval_seconds: float = 30.0
+    reconnect_initial_seconds: float = 1.0
+    reconnect_max_seconds: float = 30.0
 
     @property
     def database_path(self) -> Path:
@@ -27,4 +39,11 @@ class Settings:
             state_dir=state_dir,
             socket_path=socket_path,
             serial_port=os.environ.get("MESHPINCER_SERIAL_PORT"),
+            usb_vid=_env_int("MESHPINCER_USB_VID", 0x2886),
+            usb_pid=_env_int("MESHPINCER_USB_PID", 0x1667),
+            usb_serial=os.environ.get("MESHPINCER_USB_SERIAL"),
+            query_timeout_seconds=float(os.environ.get("MESHPINCER_QUERY_TIMEOUT", "5")),
+            refresh_interval_seconds=float(os.environ.get("MESHPINCER_REFRESH_INTERVAL", "30")),
+            reconnect_initial_seconds=float(os.environ.get("MESHPINCER_RECONNECT_INITIAL", "1")),
+            reconnect_max_seconds=float(os.environ.get("MESHPINCER_RECONNECT_MAX", "30")),
         )

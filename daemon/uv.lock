@@ -220,6 +220,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "fastapi" },
     { name = "meshcore" },
+    { name = "pyserial" },
     { name = "uvicorn" },
 ]
 
@@ -236,6 +237,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21,<1" },
     { name = "fastapi", specifier = ">=0.116,<1" },
     { name = "meshcore", specifier = ">=2.3.14,<3" },
+    { name = "pyserial", specifier = ">=3.5,<4" },
     { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
 

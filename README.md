@@ -56,10 +56,11 @@ npm run plugin:validate
 npm test
 ```
 
-The current scaffold proves the service boundary and plugin contracts. Hardware
-validation has proven USB discovery, companion-protocol access, radio
-configuration, GNSS telemetry, and persistent device naming. The next coding
-step is moving that working protocol path into the persistent daemon.
+The first hardware-backed daemon slice is operational. It discovers a companion
+by stable USB identity, owns and reconnects the serial session, and serves live
+status, health, telemetry, contacts, and channel data over the Unix socket. The
+OpenClaw plugin exposes that data through typed tools without publishing device
+serial numbers, channel secrets, or contact coordinates.
 
 ## Project status
 

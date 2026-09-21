@@ -47,6 +47,8 @@ operator-tool contracts:
 
 - `meshcore_status`
 - `meshcore_messages`
+- `meshcore_contacts`
+- `meshcore_channels`
 - `meshcore_send`
 - `meshcore_repeater_status`
 - `meshcore_repeater_configure`
@@ -60,6 +62,8 @@ current product scope.
 Initial endpoints:
 
 - `GET /v1/status`
+- `GET /v1/contacts`
+- `GET /v1/channels?include_empty=<bool>`
 - `GET /v1/messages?after_id=<id>&limit=<n>`
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
@@ -115,11 +119,12 @@ MeshPincer.
 - Receive and persist direct/channel messages
 - Send test messages and correlate acknowledgements
 
-Status as of 2026-09-20: USB discovery and read-only device, radio, contact,
-channel, statistics, and GNSS queries have been proven on a Wio Tracker L1 Pro.
-The Seattle network profile was applied and verified across a fresh serial
-connection. Receive/persistence and RF send/acknowledgement acceptance remain
-open. See [`docs/hardware-validation.md`](docs/hardware-validation.md).
+Status as of 2026-09-20: stable USB discovery, exclusive serial ownership,
+automatic reconnect, and live read-only status, contact, and channel APIs are
+implemented and covered by fake-backend tests. The packaged daemon and typed
+TypeScript client have been proven end to end against a Wio Tracker L1 Pro over
+the Unix socket. Receive/persistence and RF send/acknowledgement acceptance
+remain open. See [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ### M2 — operator tools
 

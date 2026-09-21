@@ -7,6 +7,8 @@ describe("meshpincer", () => {
     expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual([
       "meshcore_status",
       "meshcore_messages",
+      "meshcore_contacts",
+      "meshcore_channels",
       "meshcore_send",
       "meshcore_repeater_status",
       "meshcore_repeater_configure",

@@ -4,6 +4,7 @@ import stat
 
 import uvicorn
 
+from .app import create_app
 from .config import Settings
 
 
@@ -18,7 +19,7 @@ def main() -> None:
         settings.socket_path.unlink()
 
     uvicorn.run(
-        "meshpincer.app:app",
+        create_app(settings),
         uds=str(settings.socket_path),
         log_level="info",
     )
