@@ -34,5 +34,9 @@ The companion's self-telemetry also returned a GNSS location consistent with
 Seattle's Capitol Hill neighborhood. No advert or mesh message was transmitted
 during configuration or GNSS validation.
 
+Changing the companion's device/advert name and reading it back after a fresh
+serial connection was also proven. The chosen name is device configuration;
+MeshPincer remains name-agnostic and discovers it through self-info at runtime.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

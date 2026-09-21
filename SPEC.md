@@ -80,6 +80,20 @@ SQLite runs in WAL mode and records:
 
 Secrets are references or device-held values, not message-database columns.
 
+## Identity and display names
+
+- The companion radio owns the cryptographic node identity and device/advert
+  name. MeshPincer reads both from self-info after every connection or
+  reconnect; neither is compiled into the daemon or plugin.
+- Direct-message peers are normalized by public key, never by display name.
+- Channel sender names are unverified application text. Outbound channel
+  formatting uses an optional configured sender-label override and otherwise
+  defaults to the name currently reported by the radio.
+- Received channel sender labels are treated as untrusted display metadata and
+  are never promoted to durable peer identity.
+- Tests and examples use generic fixture values rather than product-owner or
+  operator-specific names.
+
 ## Delivery milestones
 
 ### M0 — repository scaffold
