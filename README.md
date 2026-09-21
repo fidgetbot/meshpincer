@@ -84,6 +84,11 @@ and atomically appends monotonically numbered events. Independent OpenClaw
 consumers can replay those events and advance durable cursors only after they
 have processed them, providing at-least-once delivery across restarts.
 
+The receive path has been proven over RF with a second physical MeshCore node:
+both channel traffic and an encrypted direct message survived a clean daemon
+restart with stable message and event IDs. Outbound send and acknowledgement
+correlation are the remaining M1 radio acceptance cases.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

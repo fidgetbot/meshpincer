@@ -48,5 +48,36 @@ and channel data. Graceful shutdown released the serial connection.
 This validation did not send an advert or mesh message. The live API output was
 also checked to ensure it contains no channel secret or USB hardware serial.
 
+### Two-node receive acceptance
+
+A second MeshCore companion was exchanged with the Wio through out-of-band
+contact cards containing only node name, public key, and node type. Neither
+node needed to advertise over RF. Both contact records were verified by public
+key before testing.
+
+After the radio profile change, the Wio initially reported the stored Seattle
+profile correctly but accumulated no receive airtime or packets while the
+second node was receiving active traffic on the same profile. A companion
+device reboot restored reception. This demonstrates that configuration
+read-back alone is not sufficient validation after a profile change: live
+receive airtime or packet counters must also advance during known traffic.
+
+With the receiver active, the packaged daemon accepted and durably stored both
+Public-channel traffic and an encrypted direct message from the second node.
+The direct message resolved from its six-byte wire prefix to the contact's full
+public key. A clean daemon restart preserved the original message and event
+IDs, replayed them from an unadvanced consumer cursor, and did not create
+additional records.
+
+The sender later retransmitted the same direct-message text with a new sender
+timestamp while changing from a zero-hop path to flood routing. MeshPincer
+preserved that as a separate protocol message. Exact redelivery of the same
+protocol identity is deduplicated; distinct sender timestamps are retained so
+an intentional repeated message is not silently discarded.
+
+The remaining M1 RF acceptance work is outbound transmission and
+acknowledgement correlation. MeshPincer itself transmitted no advert, channel
+message, or direct message during this receive test.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

@@ -65,6 +65,31 @@ async def test_concurrent_duplicate_callbacks_create_one_event(store: Store) -> 
     assert len(await store.list_events(after_id=0, limit=100)) == 1
 
 
+async def test_same_protocol_message_over_different_paths_is_deduplicated(
+    store: Store,
+) -> None:
+    direct = InboundMessage(
+        kind="direct",
+        peer_key="ab" * 32,
+        peer_key_prefix="ab" * 6,
+        text="same transmission",
+        mesh_timestamp=5678,
+        snr=12.0,
+        path_length=0,
+        text_type=0,
+    )
+    flood = direct.model_copy(update={"snr": 3.0, "path_length": 255})
+
+    first, inserted = await store.record_inbound(direct)
+    duplicate, duplicate_inserted = await store.record_inbound(flood)
+
+    assert inserted
+    assert not duplicate_inserted
+    assert duplicate.id == first.id
+    assert len(await store.list_messages(after_id=0, limit=100)) == 1
+    assert len(await store.list_events(after_id=0, limit=100)) == 1
+
+
 async def test_consumer_cursor_is_durable_monotonic_and_bounded(
     store: Store,
     tmp_path: Path,

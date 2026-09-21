@@ -89,7 +89,12 @@ SQLite runs in WAL mode and records:
 Secrets are references or device-held values, not message-database columns.
 
 Inbound message insertion and its corresponding event insertion are one SQLite
-transaction. Protocol redelivery is deduplicated before creating an event.
+transaction. Redelivery with the same protocol identity is deduplicated before
+creating an event. A sender-generated retransmission with a new sender
+timestamp is preserved as a distinct message because the companion protocol
+does not expose a stronger cross-attempt identifier and the repeated text may
+be intentional.
+
 Consumers read events after their own durable cursor and advance that cursor
 only after successful processing. Cursor movement is monotonic, yielding
 at-least-once delivery without allowing a consumer to skip beyond the newest
@@ -160,8 +165,10 @@ TypeScript client have been proven end to end against a Wio Tracker L1 Pro over
 the Unix socket. Continuous receive, normalized durable message storage,
 duplicate suppression, atomic event creation, replay, and per-consumer cursors
 are implemented and covered by deterministic tests, including restart and
-concurrent-redelivery cases. Receiving an actual RF message from a second node
-and RF send/acknowledgement acceptance remain open. See
+concurrent-redelivery cases. Public-channel reception and an encrypted direct
+message from a second physical node have now been proven through the packaged
+daemon, including full-public-key sender resolution and persistence across a
+clean daemon restart. RF send/acknowledgement acceptance remains open. See
 [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ### M2 — operator tools
