@@ -26,7 +26,7 @@
   "channelConfigs": {
     "meshcore": {
       "label": "MeshCore",
-      "description": "Native direct OpenClaw conversations over MeshCore via MeshPincer.",
+      "description": "Native direct and allowlisted private-group OpenClaw conversations over MeshCore via MeshPincer.",
       "schema": {
         "type": "object",
         "additionalProperties": false,
@@ -63,6 +63,22 @@
             },
             "default": [],
             "description": "MeshCore public keys allowed to start native OpenClaw DM turns."
+          },
+          "allowChannelIndices": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 255
+            },
+            "default": [],
+            "description": "Private MeshCore channel slots allowed to start native group turns. Public (slot 0) is never accepted."
+          },
+          "channelSenderLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "description": "Optional sender label for native private-channel replies."
           }
         }
       }

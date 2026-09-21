@@ -3,6 +3,7 @@ import {
   createChatChannelPlugin,
   createChannelPluginBase,
   type OpenClawConfig,
+  type PluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import { dispatchInboundDirectDm } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
@@ -54,6 +55,19 @@ const channelConfigJsonSchema = {
       default: [],
       description: "MeshCore public keys allowed to start native OpenClaw DM turns.",
     },
+    allowChannelIndices: {
+      type: "array",
+      items: { type: "integer", minimum: 1, maximum: 255 },
+      default: [],
+      description:
+        "Private MeshCore channel slots allowed to start native group turns. Public (slot 0) is never accepted.",
+    },
+    channelSenderLabel: {
+      type: "string",
+      minLength: 1,
+      maxLength: 32,
+      description: "Optional sender label for native private-channel replies.",
+    },
   },
 } as const;
 
@@ -64,6 +78,8 @@ type MeshCoreChannelConfig = {
   startAtLatest?: boolean;
   pollIntervalMs?: number;
   allowDirectFrom?: string[];
+  allowChannelIndices?: number[];
+  channelSenderLabel?: string;
 };
 
 export type ResolvedMeshCoreAccount = {
@@ -75,6 +91,8 @@ export type ResolvedMeshCoreAccount = {
   startAtLatest: boolean;
   pollIntervalMs: number;
   allowDirectFrom: string[];
+  allowChannelIndices: number[];
+  channelSenderLabel?: string;
 };
 
 export type MeshCoreEvent = {
@@ -237,6 +255,13 @@ export function resolveMeshCoreAccount(
   const allowDirectFrom = (config.allowDirectFrom ?? [])
     .map((entry) => entry.toLowerCase())
     .filter((entry) => publicKeyPattern.test(entry));
+  const allowChannelIndices = [
+    ...new Set(
+      (config.allowChannelIndices ?? []).filter(
+        (entry) => Number.isInteger(entry) && entry > 0 && entry <= 255,
+      ),
+    ),
+  ];
   return {
     accountId: accountId ?? defaultAccountId,
     enabled: config.enabled === true,
@@ -246,6 +271,8 @@ export function resolveMeshCoreAccount(
     startAtLatest: config.startAtLatest !== false,
     pollIntervalMs: config.pollIntervalMs ?? defaultPollIntervalMs,
     allowDirectFrom,
+    allowChannelIndices,
+    channelSenderLabel: config.channelSenderLabel?.trim() || undefined,
   };
 }
 
@@ -254,7 +281,17 @@ export function normalizeMeshCoreTarget(target: string): string | undefined {
   const withoutPrefix = trimmed.toLowerCase().startsWith("meshcore:")
     ? trimmed.slice("meshcore:".length)
     : trimmed;
-  return publicKeyPattern.test(withoutPrefix) ? withoutPrefix.toLowerCase() : undefined;
+  if (publicKeyPattern.test(withoutPrefix)) return withoutPrefix.toLowerCase();
+  const channel = /^channel:([1-9][0-9]{0,2})$/i.exec(withoutPrefix);
+  if (!channel) return undefined;
+  const index = Number(channel[1]);
+  return index <= 255 ? `channel:${index}` : undefined;
+}
+
+function channelIndexFromTarget(target: string): number | undefined {
+  const normalized = normalizeMeshCoreTarget(target);
+  if (!normalized?.startsWith("channel:")) return undefined;
+  return Number(normalized.slice("channel:".length));
 }
 
 function replyText(payload: unknown): string {
@@ -300,6 +337,32 @@ export function nativeRadioReply(text: string): string | undefined {
   return nativeReplyTooLong;
 }
 
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function privateChannelInvocation(text: string, nodeName: string): string | undefined {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized || !nodeName.trim()) return undefined;
+  const mention = new RegExp(`(?:^|\\s)@${escapeRegex(nodeName.trim())}(?=$|[\\s,:])`, "i");
+  const match = mention.exec(normalized);
+  if (!match) return undefined;
+  const body = normalized.slice(match.index + match[0].length).replace(/^[\s,:-]+/, "").trim();
+  return body || undefined;
+}
+
+export function privateChannelRadioReply(label: string, text: string): string | undefined {
+  const response = nativeRadioReply(text);
+  if (!response) return undefined;
+  const prefix = `${label.trim()}: `;
+  const combined = `${prefix}${response}`;
+  if (new TextEncoder().encode(combined).length <= meshCoreAgentTargetBytes) return combined;
+  const fallback = `${prefix}Reply too long.`;
+  return new TextEncoder().encode(fallback).length <= meshCoreAgentTargetBytes
+    ? fallback
+    : nativeReplyTooLong;
+}
+
 export function acceptsDirectDeliveryState(
   state: string | undefined,
   requireAcknowledgement: boolean,
@@ -329,6 +392,26 @@ async function sendDirect(
   return { messageId: String(messageId), deliveryState: state };
 }
 
+async function sendChannel(
+  client: MeshPincerClient,
+  channelIndex: number,
+  text: string,
+): Promise<{ messageId: string; deliveryState: string }> {
+  const response = objectValue(
+    await client.post("/v1/messages/channel", {
+      public_key: null,
+      channel_index: channelIndex,
+      text: singleRadioReply(text),
+    }),
+  );
+  const messageId = numberValue(response?.message_id);
+  const state = stringValue(response?.delivery_state);
+  if (messageId === undefined || state !== "transmitted") {
+    throw new Error(`MeshCore channel delivery was not transmitted (${state ?? "unknown"})`);
+  }
+  return { messageId: String(messageId), deliveryState: state };
+}
+
 const outbound = {
   deliveryMode: "gateway" as const,
   textChunkLimit: 160,
@@ -338,7 +421,9 @@ const outbound = {
       ? { ok: true as const, to: normalized }
       : {
           ok: false as const,
-          error: new Error("MeshCore target must be a 64-character public key"),
+          error: new Error(
+            "MeshCore target must be a 64-character public key or private channel:<index>",
+          ),
         };
   },
   sendText: async ({
@@ -354,7 +439,28 @@ const outbound = {
   }) => {
     const account = resolveMeshCoreAccount(cfg, accountId);
     const target = normalizeMeshCoreTarget(to);
-    if (!target) throw new Error("MeshCore target must be a 64-character public key");
+    if (!target) {
+      throw new Error(
+        "MeshCore target must be a 64-character public key or private channel:<index>",
+      );
+    }
+    const channelIndex = channelIndexFromTarget(target);
+    if (channelIndex !== undefined) {
+      if (!account.allowChannelIndices.includes(channelIndex)) {
+        throw new Error("MeshCore private channel is not allowlisted");
+      }
+      const client = new MeshPincerClient(account.socketPath);
+      const status = parseStatus(await client.get("/v1/status"));
+      const label = account.channelSenderLabel ?? status.radio?.node_name ?? "MeshCore agent";
+      const reply = privateChannelRadioReply(label, text);
+      if (!reply) return { messageId: "suppressed-local-recovery" };
+      const result = await sendChannel(
+        client,
+        channelIndex,
+        reply,
+      );
+      return { messageId: result.messageId };
+    }
     const reply = nativeRadioReply(text);
     if (!reply) return { messageId: "suppressed-local-recovery" };
     const result = await sendDirect(
@@ -384,10 +490,10 @@ const channelBase = createChannelPluginBase<ResolvedMeshCoreAccount>({
         detailLabel: "MeshCore via MeshPincer",
         docsLabel: "MeshPincer",
         docsPath: "/channels/meshcore",
-        blurb: "Direct OpenClaw conversations over MeshCore radio.",
+        blurb: "Direct and allowlisted private-group OpenClaw conversations over MeshCore radio.",
       },
       capabilities: {
-        chatTypes: ["direct"],
+        chatTypes: ["direct", "group"],
         media: false,
         reactions: false,
         threads: false,
@@ -428,17 +534,21 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
     messaging: {
       targetPrefixes: ["meshcore"],
       normalizeTarget: normalizeMeshCoreTarget,
-      inferTargetChatType: () => "direct",
+      inferTargetChatType: ({ to }: { to?: string | null }) =>
+        normalizeMeshCoreTarget(to ?? "")?.startsWith("channel:") ? "group" : "direct",
       targetResolver: {
         looksLikeId: (value) => normalizeMeshCoreTarget(value) !== undefined,
-        hint: "<64-character MeshCore public key>",
+        hint: "<64-character MeshCore public key | channel:index>",
       },
     },
     message: messageAdapter,
     gateway: {
       startAccount: async (ctx) => {
+        const runtime = ctx.channelRuntime as PluginRuntime | undefined;
+        if (!runtime) throw new Error("MeshCore channel runtime is unavailable");
         const client = new MeshPincerClient(ctx.account.socketPath);
         const allow = new Set(ctx.account.allowDirectFrom);
+        const allowedChannels = new Set(ctx.account.allowChannelIndices);
         const status = parseStatus(await client.get("/v1/status"));
         const selfKey = status.radio?.public_key ?? "unknown";
         const selfName = status.radio?.node_name ?? "MeshCore agent";
@@ -460,7 +570,110 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
           processEvent: async (event) => {
             if (event.kind !== "message.received") return;
             if (stringValue(event.payload.direction) !== "inbound") return;
-            if (stringValue(event.payload.kind) !== "direct") return;
+            const kind = stringValue(event.payload.kind);
+            if (kind === "channel") {
+              const channelIndex = numberValue(event.payload.channel_index);
+              const rawText = stringValue(event.payload.text);
+              if (channelIndex === undefined || channelIndex === 0 || !rawText) return;
+              if (!allowedChannels.has(channelIndex)) return;
+              const body = privateChannelInvocation(rawText, selfName);
+              if (!body) return;
+
+              const target = `meshcore:channel:${channelIndex}`;
+              const route = runtime.channel.routing.resolveAgentRoute({
+                cfg: ctx.cfg,
+                channel: "meshcore",
+                accountId: ctx.account.accountId,
+                peer: { kind: "group", id: `channel-${channelIndex}` },
+              });
+              const ctxPayload = runtime.channel.inbound.buildContext({
+                channel: "meshcore",
+                accountId: ctx.account.accountId,
+                provider: "meshcore",
+                surface: "meshcore",
+                messageId: `meshpincer-event-${event.id}`,
+                timestamp: event.recorded_at ? Date.parse(event.recorded_at) : undefined,
+                from: target,
+                sender: {
+                  id: `channel-${channelIndex}-participant`,
+                  displayLabel: "Unverified private-channel participant",
+                },
+                conversation: {
+                  kind: "group",
+                  id: `channel-${channelIndex}`,
+                  label: `MeshCore private channel ${channelIndex}`,
+                  nativeChannelId: String(channelIndex),
+                  routePeer: { kind: "group", id: `channel-${channelIndex}` },
+                },
+                route: {
+                  agentId: route.agentId,
+                  accountId: route.accountId,
+                  routeSessionKey: route.sessionKey,
+                  mainSessionKey: route.mainSessionKey,
+                  createIfMissing: true,
+                },
+                reply: {
+                  to: target,
+                  originatingTo: target,
+                  nativeChannelId: String(channelIndex),
+                  replyTarget: target,
+                  deliveryTarget: target,
+                  sourceReplyDeliveryMode: "channel",
+                },
+                message: {
+                  rawBody: rawText,
+                  bodyForAgent: body,
+                  commandBody: body,
+                  senderLabel: "Unverified private-channel participant",
+                },
+                access: {
+                  commands: { authorized: false },
+                  mentions: {
+                    canDetectMention: true,
+                    wasMentioned: true,
+                    hasAnyMention: true,
+                    explicitlyMentionedBot: true,
+                    requireMention: true,
+                    effectiveWasMentioned: true,
+                  },
+                },
+                channelIngress: "unsupported",
+              });
+              await runtime.channel.inbound.dispatch({
+                cfg: ctx.cfg,
+                channel: "meshcore",
+                accountId: ctx.account.accountId,
+                route: {
+                  agentId: route.agentId,
+                  dmScope: route.dmScope,
+                  sessionKey: route.sessionKey,
+                },
+                ctxPayload,
+                toolsAllow: [],
+                record: {
+                  createIfMissing: true,
+                  onRecordError: (error: unknown) =>
+                    ctx.log?.error?.(`meshcore group record failed: ${String(error)}`),
+                },
+                delivery: {
+                  deliver: async (payload: unknown) => {
+                    const label = ctx.account.channelSenderLabel ?? selfName;
+                    const response = privateChannelRadioReply(label, replyText(payload));
+                    if (!response) return { visibleReplySent: false };
+                    const result = await sendChannel(client, channelIndex, response);
+                    return {
+                      messageIds: [result.messageId],
+                      visibleReplySent: true,
+                      content: response,
+                    };
+                  },
+                  onError: (error: unknown) =>
+                    ctx.log?.error?.(`meshcore group dispatch failed: ${String(error)}`),
+                },
+              });
+              return;
+            }
+            if (kind !== "direct") return;
             const peerKey = stringValue(event.payload.peer_key)?.toLowerCase();
             const text = stringValue(event.payload.text);
             if (!peerKey || !publicKeyPattern.test(peerKey) || !text) return;

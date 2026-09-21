@@ -143,6 +143,9 @@ export const toolEntry = defineToolPlugin({
       }),
       optional: true,
       execute: async ({ kind, text, publicKey, channelIndex }, config) => {
+        if (new TextEncoder().encode(text).length > 160) {
+          throw new Error("MeshCore text must be at most 160 UTF-8 bytes");
+        }
         const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
         const path = kind === "direct" ? "/v1/messages/direct" : "/v1/messages/channel";
         return {

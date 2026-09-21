@@ -48,6 +48,11 @@ class FakeRadioManager:
             trip_time_ms=42,
         )
 
+    async def send_channel(self, channel_index: int, text: str, on_transmitted):
+        assert channel_index == 3
+        assert text == "Fidget: private send"
+        await on_transmitted()
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
@@ -198,3 +203,30 @@ async def test_direct_send_rejects_more_than_160_utf8_bytes(settings: Settings) 
 
     assert response.status_code == 422
     assert "160 UTF-8 bytes" in response.text
+
+
+@pytest.mark.asyncio
+async def test_channel_send_records_transmit_without_ack(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/messages/channel",
+                json={"channel_index": 3, "text": "Fidget: private send"},
+            )
+            messages = await client.get("/v1/messages")
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message_id": 1,
+        "delivery_state": "transmitted",
+        "ack_code": None,
+    }
+    assert messages.json()[0]["kind"] == "channel"
+    assert messages.json()[0]["channel_index"] == 3
+    assert [event["kind"] for event in events.json()] == [
+        "message.queued",
+        "message.transmitted",
+    ]

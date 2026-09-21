@@ -213,7 +213,7 @@ read/change/read-back proof are complete.
 - Resume inbound delivery from durable event cursors after restarts
 - Apply LoRa-aware chunking and reply routing
 
-Status as of 2026-09-20: the direct-message channel is implemented, installed,
+Status as of 2026-09-21: the direct-message channel is implemented, installed,
 and connected in a live OpenClaw Gateway. It uses a dedicated durable consumer
 cursor, baselines a new consumer at the current event head, maps conversations
 by full peer public key, and advances only after successful dispatch. Inbound
@@ -224,8 +224,14 @@ produced an RF reply. That test also proved that a generic delivery-recovery
 message can waste airtime when an ACK is uncertain, so native replies now keep
 timeout diagnostics local and do not automatically resend. A final post-fix
 hardware test produced exactly one 13-byte `MeshPincer OK` reply, recorded a
-matching acknowledgement, and emitted no recovery notice or retry. Configured
-MeshCore group-channel conversations remain to be implemented.
+matching acknowledgement, and emitted no recovery notice or retry. Private
+group-channel routing and outbound transmission are now implemented behind
+matching daemon/plugin slot allowlists. Slot 0 (`Public`) is hard-blocked from
+agent turns and transmission. Private traffic requires an explicit runtime-name
+mention, uses stable per-slot group sessions, treats sender labels as untrusted,
+cannot authorize commands, includes the sender label inside the 75-byte reply
+budget, and applies strict flood cooldowns. Hardware acceptance on an ephemeral
+private channel remains before this part of M3 is complete.
 
 ## Verification requirements
 

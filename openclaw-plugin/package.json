@@ -43,7 +43,7 @@
       "detailLabel": "MeshCore via MeshPincer",
       "docsLabel": "MeshPincer",
       "docsPath": "/channels/meshcore",
-      "blurb": "Direct OpenClaw conversations over MeshCore radio."
+      "blurb": "Direct and allowlisted private-group OpenClaw conversations over MeshCore radio."
     }
   }
 }

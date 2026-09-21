@@ -22,6 +22,6 @@ describe("meshpincer", () => {
       capabilities: { chatTypes: string[] };
     };
     expect(channel.id).toBe("meshcore");
-    expect(channel.capabilities.chatTypes).toEqual(["direct"]);
+    expect(channel.capabilities.chatTypes).toEqual(["direct", "group"]);
   });
 });

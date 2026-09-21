@@ -171,7 +171,44 @@ def create_app(
     async def send_channel(request: SendMessageRequest) -> SendMessageResult:
         if request.channel_index is None:
             raise HTTPException(status_code=422, detail="channel_index is required")
-        raise HTTPException(status_code=503, detail="radio integration is not configured")
+        message = await store.queue_outbound_channel(request.channel_index, request.text)
+
+        async def mark_transmitted() -> None:
+            await store.transition_outbound(
+                message.id,
+                state=DeliveryState.TRANSMITTED,
+            )
+
+        try:
+            await radio.send_channel(
+                request.channel_index,
+                request.text,
+                mark_transmitted,
+            )
+        except SendPolicyError as exc:
+            failed = await store.transition_outbound(message.id, state=DeliveryState.FAILED)
+            raise HTTPException(
+                status_code=429,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            failed = await store.transition_outbound(message.id, state=DeliveryState.FAILED)
+            raise HTTPException(
+                status_code=422,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+        except Exception as exc:
+            failed = await store.transition_outbound(message.id, state=DeliveryState.FAILED)
+            raise HTTPException(
+                status_code=503,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+
+        return SendMessageResult(
+            message_id=message.id,
+            delivery_state=DeliveryState.TRANSMITTED,
+            ack_code=None,
+        )
 
     @app.get("/v1/repeaters/{public_key}/status")
     async def repeater_status(public_key: str) -> dict[str, str]:

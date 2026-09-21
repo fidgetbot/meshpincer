@@ -197,3 +197,18 @@ async def test_outbound_delivery_rejects_invalid_transition(store: Store) -> Non
 
     with pytest.raises(ValueError, match="queued -> acknowledged"):
         await store.transition_outbound(queued.id, DeliveryState.ACKNOWLEDGED)
+
+
+async def test_outbound_channel_transmit_is_durable_without_fake_ack(store: Store) -> None:
+    queued = await store.queue_outbound_channel(3, "Fidget: private hello")
+    transmitted = await store.transition_outbound(queued.id, DeliveryState.TRANSMITTED)
+
+    assert queued.kind == "channel"
+    assert queued.channel_index == 3
+    assert queued.peer_key is None
+    assert transmitted.delivery_state == DeliveryState.TRANSMITTED
+    assert transmitted.ack_code is None
+    assert [event.kind for event in await store.list_events(0, 100)] == [
+        "message.queued",
+        "message.transmitted",
+    ]

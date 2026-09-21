@@ -23,6 +23,12 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_DIRECT_GLOBAL_COOLDOWN` and
   `MESHPINCER_DIRECT_PEER_COOLDOWN` — minimum seconds between direct sends
   globally and to the same peer (defaults: 5 and 30)
+- `MESHPINCER_CHANNEL_SEND_ALLOWLIST` — comma-separated private channel slots
+  permitted for transmission; empty by default, and slot 0 (`Public`) is always
+  blocked
+- `MESHPINCER_CHANNEL_GLOBAL_COOLDOWN` and
+  `MESHPINCER_CHANNEL_PER_CHANNEL_COOLDOWN` — minimum seconds between channel
+  floods globally and on the same slot (defaults: 30 and 300)
 
 When no serial override is set, discovery matches the configured USB identity
 and fails closed if more than one radio matches without a configured hardware
@@ -40,6 +46,7 @@ Implemented endpoints:
 - `GET /v1/consumers/{consumer_id}/cursor`
 - `PUT /v1/consumers/{consumer_id}/cursor`
 - `POST /v1/messages/direct`
+- `POST /v1/messages/channel`
 
 The daemon auto-fetches direct and channel messages while connected. It writes
 each normalized inbound message and its `message.received` event atomically,
@@ -54,6 +61,11 @@ daemon persists `queued`, `transmitted`, and `acknowledged` or `timed_out`
 delivery events, correlates the companion's expected ACK code, serializes
 radio operations, and enforces global and per-peer cooldowns before
 transmission.
+
+Channel sends require a configured private slot in the explicit daemon
+allowlist. Slot 0 (`Public`) is read-only. A successful companion submission is
+recorded as `transmitted`; MeshPincer never labels a channel broadcast
+`acknowledged` because the protocol provides no end-to-end channel ACK.
 
 The API never returns channel secrets, USB hardware serials, or stored contact
 coordinates.

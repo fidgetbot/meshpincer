@@ -7,6 +7,8 @@ import {
   MeshCoreEventPump,
   nativeRadioReply,
   normalizeMeshCoreTarget,
+  privateChannelInvocation,
+  privateChannelRadioReply,
   singleRadioReply,
   type MeshCoreEvent,
 } from "./channel.js";
@@ -78,6 +80,29 @@ describe("MeshCore native channel", () => {
     expect(normalizeMeshCoreTarget(key)).toBe(key.toLowerCase());
     expect(normalizeMeshCoreTarget(`meshcore:${key}`)).toBe(key.toLowerCase());
     expect(normalizeMeshCoreTarget("channel:0")).toBeUndefined();
+    expect(normalizeMeshCoreTarget("channel:3")).toBe("channel:3");
+    expect(normalizeMeshCoreTarget("meshcore:channel:3")).toBe("channel:3");
+  });
+
+  it("requires an explicit runtime-name mention for private-channel turns", () => {
+    expect(privateChannelInvocation("NVM-P: hello", "Fidget")).toBeUndefined();
+    expect(privateChannelInvocation("NVM-P: @Fidget status?", "Fidget")).toBe(
+      "status?",
+    );
+    expect(privateChannelInvocation("@runtime-node: ping", "runtime-node")).toBe(
+      "ping",
+    );
+  });
+
+  it("counts the channel sender label inside the 75-byte RF budget", () => {
+    expect(privateChannelRadioReply("Fidget", "Private OK")).toBe(
+      "Fidget: Private OK",
+    );
+    const oversized = privateChannelRadioReply("Fidget", "x".repeat(75));
+    expect(oversized).toBe("Fidget: Reply too long.");
+    expect(new TextEncoder().encode(oversized ?? "").length).toBeLessThanOrEqual(
+      meshCoreAgentTargetBytes,
+    );
   });
 
   it("baselines a new consumer at the current event head", async () => {

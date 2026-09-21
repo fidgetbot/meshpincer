@@ -21,6 +21,8 @@ class FakeBackend:
         self.receiver = None
         self.contact_path_length = 2
         self.sent: list[tuple[str, str]] = []
+        self.channel_one_configured = False
+        self.channel_sent: list[tuple[int, str]] = []
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -85,7 +87,7 @@ class FakeBackend:
                 "channel_idx": 1,
                 "channel_name": "",
                 "channel_hash": "37",
-                "configured": False,
+                "configured": self.channel_one_configured,
             },
         ]
 
@@ -105,6 +107,10 @@ class FakeBackend:
             acknowledged=True,
             trip_time_ms=42,
         )
+
+    async def send_channel(self, channel_index: int, text: str, on_transmitted):
+        self.channel_sent.append((channel_index, text))
+        await on_transmitted()
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -426,6 +432,103 @@ async def test_manager_rate_limits_repeated_direct_send(tmp_path: Path) -> None:
     assert backend.sent == [("34" * 32, "first")]
 
 
+async def test_manager_allows_one_allowlisted_private_channel_send(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        channel_send_allowlist=frozenset({1}),
+    )
+    backend = FakeBackend()
+    backend.channel_one_configured = True
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    transmitted = False
+
+    async def on_transmitted() -> None:
+        nonlocal transmitted
+        transmitted = True
+
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        await manager.send_channel(1, "Fidget: private test", on_transmitted)
+    finally:
+        await manager.stop()
+
+    assert transmitted
+    assert backend.channel_sent == [(1, "Fidget: private test")]
+
+
+async def test_manager_rejects_public_and_unallowlisted_channel_sends(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        channel_send_allowlist=frozenset({0}),
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(SendPolicyError, match="Public"):
+            await manager.send_channel(0, "must not transmit", lambda: asyncio.sleep(0))
+        with pytest.raises(SendPolicyError, match="allowlisted"):
+            await manager.send_channel(1, "must not transmit", lambda: asyncio.sleep(0))
+    finally:
+        await manager.stop()
+
+    assert backend.channel_sent == []
+
+
+async def test_manager_rate_limits_repeated_private_channel_send(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        channel_send_allowlist=frozenset({1}),
+        channel_global_cooldown_seconds=30,
+        channel_per_channel_cooldown_seconds=300,
+    )
+    backend = FakeBackend()
+    backend.channel_one_configured = True
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        await manager.send_channel(1, "first", lambda: asyncio.sleep(0))
+        with pytest.raises(SendPolicyError, match="cooldown"):
+            await manager.send_channel(1, "second", lambda: asyncio.sleep(0))
+    finally:
+        await manager.stop()
+
+    assert backend.channel_sent == [(1, "first")]
+
+
 async def test_meshcore_backend_correlates_early_ack() -> None:
     expected_ack = bytes.fromhex("01020304")
 
@@ -481,3 +584,25 @@ async def test_meshcore_backend_correlates_early_ack() -> None:
         acknowledged=True,
         trip_time_ms=42,
     )
+
+
+async def test_meshcore_backend_submits_channel_message_without_fake_ack() -> None:
+    class FakeCommands:
+        async def send_chan_msg(self, channel_index: int, text: str):
+            assert channel_index == 3
+            assert text == "Fidget: private test"
+            return Event(EventType.OK, {})
+
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=FakeCommands()),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+    transmitted = False
+
+    async def on_transmitted() -> None:
+        nonlocal transmitted
+        transmitted = True
+
+    await backend.send_channel(3, "Fidget: private test", on_transmitted)
+
+    assert transmitted

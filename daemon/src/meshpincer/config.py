@@ -14,6 +14,13 @@ def _env_int(name: str, default: int) -> int:
     return default if value is None else int(value, 0)
 
 
+def _env_int_set(name: str) -> frozenset[int]:
+    value = os.environ.get(name, "")
+    if not value.strip():
+        return frozenset()
+    return frozenset(int(item.strip(), 0) for item in value.split(",") if item.strip())
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     state_dir: Path
@@ -28,6 +35,9 @@ class Settings:
     reconnect_max_seconds: float = 30.0
     direct_global_cooldown_seconds: float = 5.0
     direct_peer_cooldown_seconds: float = 30.0
+    channel_send_allowlist: frozenset[int] = frozenset()
+    channel_global_cooldown_seconds: float = 30.0
+    channel_per_channel_cooldown_seconds: float = 300.0
 
     @property
     def database_path(self) -> Path:
@@ -53,5 +63,12 @@ class Settings:
             ),
             direct_peer_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_DIRECT_PEER_COOLDOWN", "30")
+            ),
+            channel_send_allowlist=_env_int_set("MESHPINCER_CHANNEL_SEND_ALLOWLIST"),
+            channel_global_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_CHANNEL_GLOBAL_COOLDOWN", "30")
+            ),
+            channel_per_channel_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_CHANNEL_PER_CHANNEL_COOLDOWN", "300")
             ),
         )

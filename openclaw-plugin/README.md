@@ -38,9 +38,13 @@ Set `mode` to `history` for an explicit message-ID-based history query.
 
 ## Native MeshCore channel
 
-The same package registers the `meshcore` channel. Its initial implementation
-supports direct messages only. Each peer is identified by its complete public
-key, and inbound peers must be listed under `channels.meshcore.allowDirectFrom`.
+The same package registers the `meshcore` channel. Each direct peer is
+identified by its complete public key, and inbound peers must be listed under
+`channels.meshcore.allowDirectFrom`. Private group slots must be listed under
+`channels.meshcore.allowChannelIndices`; slot 0 (`Public`) is always read-only.
+Private group traffic starts an agent turn only when it explicitly mentions the
+runtime node name, such as `@Fidget status?`. Channel sender labels are
+unverified and channel turns cannot authorize commands or administration.
 The channel uses a consumer cursor separate from the operator inbox and, by
 default, baselines a new installation at the latest recorded event so old radio
 traffic cannot trigger agent turns.
@@ -52,6 +56,10 @@ compatibility boundary, not an invitation to fill every packet. The daemon's
 known-contact, zero-hop route, cooldown, and no-flood rules continue to apply.
 If a reply is transmitted but its ACK is uncertain, the native channel records
 that state locally and does not send a second explanatory message or auto-retry.
+Private-channel replies include the runtime node name (or the optional
+`channelSenderLabel`) inside the same 75-byte budget. Broadcasts have no
+end-to-end ACK and are reported only as transmitted. Daemon and plugin
+allowlists must both contain the private slot before it can send.
 
 ## Build
 

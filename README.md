@@ -112,6 +112,13 @@ The native channel also enforces the 75-byte budget in code: oversized agent
 output becomes one short error, while OpenClaw restart-recovery notices are
 suppressed from RF entirely.
 
+Allowlisted private MeshCore slots map to native OpenClaw group conversations.
+They require an explicit `@<runtime node name>` invocation; sender labels remain
+untrusted and cannot authorize commands or administration. Public is always
+read-only. Private-channel replies count their sender label inside the 75-byte
+budget, use strict global/per-channel cooldowns, and are recorded as
+`transmitted` rather than falsely claiming an ACK.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

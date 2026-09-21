@@ -41,6 +41,13 @@ class RadioBackend(Protocol):
         on_transmitted: TransmittedHandler,
     ) -> DirectSendOutcome: ...
 
+    async def send_channel(
+        self,
+        channel_index: int,
+        text: str,
+        on_transmitted: ChannelTransmittedHandler,
+    ) -> None: ...
+
     async def disconnect(self) -> None: ...
 
 
@@ -48,6 +55,7 @@ Discoverer = Callable[[Settings], SerialDevice]
 Connector = Callable[[str, float], Awaitable[RadioBackend]]
 InboundHandler = Callable[[InboundMessage], Awaitable[Any]]
 TransmittedHandler = Callable[[str], Awaitable[Any]]
+ChannelTransmittedHandler = Callable[[], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +246,16 @@ class MeshCoreBackend:
         finally:
             subscription.unsubscribe()
 
+    async def send_channel(
+        self,
+        channel_index: int,
+        text: str,
+        on_transmitted: ChannelTransmittedHandler,
+    ) -> None:
+        event = await self.client.commands.send_chan_msg(channel_index, text)
+        _event_payload(event, "channel message send")
+        await on_transmitted()
+
     async def stop_receiving(self) -> None:
         if self._receiving:
             await self.client.stop_auto_message_fetching()
@@ -300,6 +318,8 @@ class RadioManager:
         self._operation_lock = asyncio.Lock()
         self._last_direct_send = float("-inf")
         self._last_direct_send_by_peer: dict[str, float] = {}
+        self._last_channel_send = float("-inf")
+        self._last_channel_send_by_index: dict[int, float] = {}
 
     async def start(self) -> None:
         if self._task is None:
@@ -375,6 +395,50 @@ class RadioManager:
                 await on_transmitted(ack_code)
 
             return await backend.send_direct(normalized_key, text, mark_transmitted)
+
+    async def send_channel(
+        self,
+        channel_index: int,
+        text: str,
+        on_transmitted: ChannelTransmittedHandler,
+    ) -> None:
+        async with self._operation_lock:
+            async with self._lock:
+                backend = self._backend
+                connected = self._status.connected
+                channel = next(
+                    (item for item in self._channels if item.index == channel_index),
+                    None,
+                )
+            if not connected or backend is None:
+                raise ConnectionError("MeshCore radio is not connected")
+            if channel_index == 0:
+                raise SendPolicyError("Public channel transmission is disabled")
+            if channel_index not in self.settings.channel_send_allowlist:
+                raise SendPolicyError("channel is not allowlisted for transmission")
+            if channel is None or not channel.configured:
+                raise ValueError("channel is not configured on the companion radio")
+
+            now = asyncio.get_running_loop().time()
+            global_remaining = (
+                self._last_channel_send + self.settings.channel_global_cooldown_seconds - now
+            )
+            channel_remaining = (
+                self._last_channel_send_by_index.get(channel_index, float("-inf"))
+                + self.settings.channel_per_channel_cooldown_seconds
+                - now
+            )
+            remaining = max(global_remaining, channel_remaining)
+            if remaining > 0:
+                raise SendPolicyError(f"channel-message cooldown active for {remaining:.1f}s")
+
+            async def mark_transmitted() -> None:
+                sent_at = asyncio.get_running_loop().time()
+                self._last_channel_send = sent_at
+                self._last_channel_send_by_index[channel_index] = sent_at
+                await on_transmitted()
+
+            await backend.send_channel(channel_index, text, mark_transmitted)
 
     async def _run(self) -> None:
         delay = self.settings.reconnect_initial_seconds

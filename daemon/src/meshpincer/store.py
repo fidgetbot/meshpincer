@@ -232,6 +232,47 @@ class Store:
             raise RuntimeError("queued outbound message could not be read back")
         return _message_from_row(row)
 
+    async def queue_outbound_channel(self, channel_index: int, text: str) -> MessageRecord:
+        recorded_at = datetime.now(UTC)
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                """
+                INSERT INTO messages(
+                    event_id, dedupe_key, direction, kind, peer_key, peer_key_prefix,
+                    channel_index, text, mesh_timestamp, snr, path_length, text_type,
+                    ack_code, recorded_at, delivery_state
+                ) VALUES (NULL, NULL, 'outbound', 'channel', NULL, NULL, ?, ?, NULL, NULL,
+                          NULL, 0, NULL, ?, ?)
+                """,
+                (
+                    channel_index,
+                    text,
+                    recorded_at.isoformat(),
+                    DeliveryState.QUEUED.value,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("outbound channel message insert did not return an id")
+            message_id = int(cursor.lastrowid)
+            event_id = await _insert_delivery_event(
+                db,
+                message_id=message_id,
+                state=DeliveryState.QUEUED,
+                recorded_at=recorded_at,
+            )
+            await db.execute(
+                "UPDATE messages SET event_id = ? WHERE id = ?",
+                (event_id, message_id),
+            )
+            cursor = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+            row = await cursor.fetchone()
+            await db.commit()
+        if row is None:
+            raise RuntimeError("queued outbound channel message could not be read back")
+        return _message_from_row(row)
+
     async def transition_outbound(
         self,
         message_id: int,
