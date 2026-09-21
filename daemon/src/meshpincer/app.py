@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Path, Query
 
 from . import __version__
 from .config import Settings
 from .models import (
+    AdvanceCursorRequest,
     ChannelRecord,
+    ConsumerCursor,
     ContactRecord,
+    EventRecord,
     MessageRecord,
     RepeaterConfigRequest,
     SendMessageRequest,
@@ -25,7 +28,7 @@ def create_app(
 ) -> FastAPI:
     resolved = settings or Settings.from_env()
     store = Store(resolved.database_path)
-    radio = radio_manager or RadioManager(resolved)
+    radio = radio_manager or RadioManager(resolved, message_handler=store.record_inbound)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -61,6 +64,46 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=500),
     ) -> list[MessageRecord]:
         return await store.list_messages(after_id=after_id, limit=limit)
+
+    @app.get("/v1/events", response_model=list[EventRecord])
+    async def events(
+        after_id: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[EventRecord]:
+        return await store.list_events(after_id=after_id, limit=limit)
+
+    @app.get(
+        "/v1/consumers/{consumer_id}/events",
+        response_model=list[EventRecord],
+    )
+    async def consumer_events(
+        consumer_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[EventRecord]:
+        cursor = await store.get_cursor(consumer_id)
+        return await store.list_events(after_id=cursor.event_id, limit=limit)
+
+    @app.get(
+        "/v1/consumers/{consumer_id}/cursor",
+        response_model=ConsumerCursor,
+    )
+    async def consumer_cursor(
+        consumer_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"),
+    ) -> ConsumerCursor:
+        return await store.get_cursor(consumer_id)
+
+    @app.put(
+        "/v1/consumers/{consumer_id}/cursor",
+        response_model=ConsumerCursor,
+    )
+    async def advance_consumer_cursor(
+        request: AdvanceCursorRequest,
+        consumer_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"),
+    ) -> ConsumerCursor:
+        try:
+            return await store.advance_cursor(consumer_id, request.event_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/v1/messages/direct", response_model=SendMessageResult)
     async def send_direct(request: SendMessageRequest) -> SendMessageResult:

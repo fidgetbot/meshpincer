@@ -5,7 +5,8 @@ import pytest
 
 from meshpincer.app import create_app
 from meshpincer.config import Settings
-from meshpincer.models import ChannelRecord, ContactRecord, RadioStatus
+from meshpincer.models import ChannelRecord, ContactRecord, InboundMessage, RadioStatus
+from meshpincer.store import Store
 
 
 class FakeRadioManager:
@@ -98,3 +99,43 @@ async def test_contacts_and_channels_come_from_radio_manager(settings: Settings)
         {"index": 0, "name": "Public", "configured": True, "channel_hash": "11"}
     ]
     assert len(all_channels.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_events_and_consumer_cursor_api(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        store = Store(settings.database_path)
+        message, _ = await store.record_inbound(
+            InboundMessage(
+                kind="direct",
+                peer_key="cd" * 32,
+                peer_key_prefix="cd" * 6,
+                text="hello",
+                mesh_timestamp=42,
+            )
+        )
+        assert message.event_id is not None
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            events = await client.get("/v1/events")
+            pending = await client.get("/v1/consumers/native-channel/events")
+            cursor = await client.put(
+                "/v1/consumers/native-channel/cursor",
+                json={"event_id": message.event_id},
+            )
+            no_pending = await client.get("/v1/consumers/native-channel/events")
+            invalid = await client.put(
+                "/v1/consumers/native-channel/cursor",
+                json={"event_id": message.event_id + 1},
+            )
+
+    assert events.status_code == 200
+    assert events.json()[0]["kind"] == "message.received"
+    assert pending.json() == events.json()
+    assert cursor.json() == {
+        "consumer_id": "native-channel",
+        "event_id": message.event_id,
+    }
+    assert no_pending.json() == []
+    assert invalid.status_code == 422

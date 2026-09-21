@@ -33,6 +33,10 @@ export class MeshPincerClient {
     return this.requestJson("PATCH", path, body);
   }
 
+  put(path: string, body: JsonValue): Promise<JsonValue> {
+    return this.requestJson("PUT", path, body);
+  }
+
   private requestJson(method: string, path: string, body?: JsonValue): Promise<JsonValue> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
 

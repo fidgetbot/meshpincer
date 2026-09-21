@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from meshcore.events import EventType
 
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
-from meshpincer.radio import RadioManager
+from meshpincer.models import InboundMessage
+from meshpincer.radio import MeshCoreBackend, RadioManager
+from meshpincer.store import Store
 
 
 class FakeBackend:
     def __init__(self) -> None:
         self.disconnected = False
+        self.receiver = None
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -80,6 +86,14 @@ class FakeBackend:
             },
         ]
 
+    async def start_receiving(self, handler) -> None:
+        self.receiver = handler
+
+    async def emit(self, message: InboundMessage) -> None:
+        if self.receiver is None:
+            raise AssertionError("receive handler was not installed")
+        await self.receiver(message)
+
     async def disconnect(self) -> None:
         self.disconnected = True
 
@@ -90,6 +104,14 @@ async def wait_until_connected(manager: RadioManager) -> None:
             return
         await asyncio.sleep(0.001)
     raise AssertionError("radio manager did not connect")
+
+
+async def wait_until_receiving(backend: FakeBackend) -> None:
+    for _ in range(100):
+        if backend.receiver is not None:
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError("radio manager did not install its receive handler")
 
 
 async def test_manager_discovers_refreshes_and_sanitizes(tmp_path: Path) -> None:
@@ -171,3 +193,118 @@ async def test_manager_retries_after_connection_failure(tmp_path: Path) -> None:
     assert attempts == 2
     assert status.connected
     assert status.last_error is None
+
+
+async def test_manager_persists_received_messages(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    store = Store(config.database_path)
+    await store.initialize()
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+        message_handler=store.record_inbound,
+    )
+    await manager.start()
+    try:
+        await wait_until_receiving(backend)
+        inbound = InboundMessage(
+            kind="channel",
+            channel_index=0,
+            text="Agent: hello",
+            mesh_timestamp=10,
+            snr=2.5,
+            path_length=1,
+        )
+        await backend.emit(inbound)
+        await backend.emit(inbound)
+    finally:
+        await manager.stop()
+
+    messages = await store.list_messages(after_id=0, limit=100)
+    events = await store.list_events(after_id=0, limit=100)
+    assert len(messages) == 1
+    assert messages[0].text == "Agent: hello"
+    assert len(events) == 1
+
+
+async def test_meshcore_backend_normalizes_direct_and_channel_events() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.callbacks = {}
+            self.fetching = False
+
+        def subscribe(self, event_type, callback):
+            self.callbacks[event_type] = callback
+            return event_type
+
+        def get_contact_by_key_prefix(self, prefix: str):
+            return {"public_key": "ab" * 32} if prefix == "ab" * 6 else None
+
+        async def start_auto_message_fetching(self) -> None:
+            self.fetching = True
+
+    client = FakeClient()
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+    messages: list[InboundMessage] = []
+
+    async def handle(message: InboundMessage) -> None:
+        messages.append(message)
+
+    await backend.start_receiving(handle)
+    await client.callbacks[EventType.CONTACT_MSG_RECV](
+        SimpleNamespace(
+            payload={
+                "pubkey_prefix": "ab" * 6,
+                "text": "private hello",
+                "sender_timestamp": 100,
+                "SNR": 4.25,
+                "path_len": 2,
+                "txt_type": 0,
+            }
+        )
+    )
+    await client.callbacks[EventType.CHANNEL_MSG_RECV](
+        SimpleNamespace(
+            payload={
+                "channel_idx": 3,
+                "text": "Untrusted label: hello",
+                "sender_timestamp": 101,
+                "SNR": 2.0,
+                "path_len": 1,
+                "txt_type": 0,
+            }
+        )
+    )
+
+    assert client.fetching
+    assert messages == [
+        InboundMessage(
+            kind="direct",
+            peer_key="ab" * 32,
+            peer_key_prefix="ab" * 6,
+            text="private hello",
+            mesh_timestamp=100,
+            snr=4.25,
+            path_length=2,
+            text_type=0,
+        ),
+        InboundMessage(
+            kind="channel",
+            channel_index=3,
+            text="Untrusted label: hello",
+            mesh_timestamp=101,
+            snr=2.0,
+            path_length=1,
+            text_type=0,
+        ),
+    ]

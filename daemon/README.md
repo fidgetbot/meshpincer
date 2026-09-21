@@ -25,12 +25,24 @@ When no serial override is set, discovery matches the configured USB identity
 and fails closed if more than one radio matches without a configured hardware
 serial.
 
-Implemented read-only endpoints:
+Implemented read-only and replay endpoints:
 
 - `GET /v1/status`
 - `GET /v1/contacts`
 - `GET /v1/channels` (configured channels only)
 - `GET /v1/channels?include_empty=true` (all device slots)
+- `GET /v1/messages?after_id=<id>&limit=<n>`
+- `GET /v1/events?after_id=<id>&limit=<n>`
+- `GET /v1/consumers/{consumer_id}/events?limit=<n>`
+- `GET /v1/consumers/{consumer_id}/cursor`
+- `PUT /v1/consumers/{consumer_id}/cursor`
+
+The daemon auto-fetches direct and channel messages while connected. It writes
+each normalized inbound message and its `message.received` event atomically,
+deduplicates protocol redelivery, and maintains independent monotonic cursors
+for consumers such as operator tools and the native MeshCore channel. Consumers
+advance their cursor after processing, so unacknowledged events replay after a
+restart.
 
 The API never returns channel secrets, USB hardware serials, or stored contact
 coordinates.

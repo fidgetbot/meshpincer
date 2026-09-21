@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class DeliveryState(StrEnum):
+    RECEIVED = "received"
     QUEUED = "queued"
     TRANSMITTED = "transmitted"
     ACKNOWLEDGED = "acknowledged"
@@ -85,14 +87,47 @@ class ServiceStatus(BaseModel):
 
 class MessageRecord(BaseModel):
     id: int
+    event_id: int | None = None
     direction: str
     kind: str
     peer_key: str | None = None
+    peer_key_prefix: str | None = None
     channel_index: int | None = None
     text: str
     mesh_timestamp: int | None = None
+    snr: float | None = None
+    path_length: int | None = None
+    text_type: int | None = None
     recorded_at: datetime
     delivery_state: DeliveryState
+
+
+class InboundMessage(BaseModel):
+    kind: Literal["direct", "channel"]
+    text: str
+    peer_key: str | None = None
+    peer_key_prefix: str | None = None
+    channel_index: int | None = Field(default=None, ge=0)
+    mesh_timestamp: int | None = None
+    snr: float | None = None
+    path_length: int | None = None
+    text_type: int | None = None
+
+
+class EventRecord(BaseModel):
+    id: int
+    kind: str
+    payload: dict[str, Any]
+    recorded_at: datetime
+
+
+class ConsumerCursor(BaseModel):
+    consumer_id: str
+    event_id: int = Field(ge=0)
+
+
+class AdvanceCursorRequest(BaseModel):
+    event_id: int = Field(ge=0)
 
 
 class SendMessageRequest(BaseModel):

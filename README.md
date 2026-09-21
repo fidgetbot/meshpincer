@@ -78,6 +78,12 @@ status, health, telemetry, contacts, and channel data over the Unix socket. The
 OpenClaw plugin exposes that data through typed tools without publishing device
 serial numbers, channel secrets, or contact coordinates.
 
+Durable receive is also implemented. The daemon continuously drains pending
+direct and channel messages into SQLite, suppresses duplicate protocol events,
+and atomically appends monotonically numbered events. Independent OpenClaw
+consumers can replay those events and advance durable cursors only after they
+have processed them, providing at-least-once delivery across restarts.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

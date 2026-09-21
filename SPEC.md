@@ -65,11 +65,14 @@ Initial endpoints:
 - `GET /v1/contacts`
 - `GET /v1/channels?include_empty=<bool>`
 - `GET /v1/messages?after_id=<id>&limit=<n>`
+- `GET /v1/events?after_id=<id>&limit=<n>`
+- `GET /v1/consumers/{consumer_id}/events?limit=<n>`
+- `GET /v1/consumers/{consumer_id}/cursor`
+- `PUT /v1/consumers/{consumer_id}/cursor`
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
 - `GET /v1/repeaters/{public_key}/status`
 - `PATCH /v1/repeaters/{public_key}/config`
-- `GET /v1/events?after_id=<id>` (planned resumable stream)
 
 The API is local-only. It must not bind a TCP listener by default.
 
@@ -84,6 +87,13 @@ SQLite runs in WAL mode and records:
 - per-consumer cursors for unread/event replay behavior.
 
 Secrets are references or device-held values, not message-database columns.
+
+Inbound message insertion and its corresponding event insertion are one SQLite
+transaction. Protocol redelivery is deduplicated before creating an event.
+Consumers read events after their own durable cursor and advance that cursor
+only after successful processing. Cursor movement is monotonic, yielding
+at-least-once delivery without allowing a consumer to skip beyond the newest
+recorded event.
 
 ## Identity and display names
 
@@ -147,8 +157,12 @@ Status as of 2026-09-20: stable USB discovery, exclusive serial ownership,
 automatic reconnect, and live read-only status, contact, and channel APIs are
 implemented and covered by fake-backend tests. The packaged daemon and typed
 TypeScript client have been proven end to end against a Wio Tracker L1 Pro over
-the Unix socket. Receive/persistence and RF send/acknowledgement acceptance
-remain open. See [`docs/hardware-validation.md`](docs/hardware-validation.md).
+the Unix socket. Continuous receive, normalized durable message storage,
+duplicate suppression, atomic event creation, replay, and per-consumer cursors
+are implemented and covered by deterministic tests, including restart and
+concurrent-redelivery cases. Receiving an actual RF message from a second node
+and RF send/acknowledgement acceptance remain open. See
+[`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ### M2 — operator tools
 

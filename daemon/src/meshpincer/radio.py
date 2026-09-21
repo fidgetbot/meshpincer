@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from meshcore import MeshCore
+from meshcore.events import EventType
 
 from .config import Settings
 from .discovery import SerialDevice, discover_serial_device
 from .models import (
     ChannelRecord,
     ContactRecord,
+    InboundMessage,
     RadioHealth,
     RadioProfile,
     RadioStatus,
@@ -29,11 +31,14 @@ class RadioBackend(Protocol):
 
     async def read_channels(self, count: int) -> Sequence[Mapping[str, Any]]: ...
 
+    async def start_receiving(self, handler: InboundHandler) -> None: ...
+
     async def disconnect(self) -> None: ...
 
 
 Discoverer = Callable[[Settings], SerialDevice]
 Connector = Callable[[str, float], Awaitable[RadioBackend]]
+InboundHandler = Callable[[InboundMessage], Awaitable[Any]]
 
 
 def _event_payload(event: Any, operation: str) -> dict[str, Any]:
@@ -55,6 +60,8 @@ class MeshCoreBackend:
     def __init__(self, client: MeshCore, timeout: float) -> None:
         self.client = client
         self.timeout = timeout
+        self._message_subscriptions: list[Any] = []
+        self._receiving = False
 
     @classmethod
     async def connect(cls, port: str, timeout: float) -> MeshCoreBackend:
@@ -117,7 +124,59 @@ class MeshCoreBackend:
             )
         return channels
 
+    async def start_receiving(self, handler: InboundHandler) -> None:
+        if self._receiving:
+            return
+
+        async def direct_message(event: Any) -> None:
+            payload = event.payload
+            prefix = str(payload.get("pubkey_prefix", "")) or None
+            contact = self.client.get_contact_by_key_prefix(prefix) if prefix else None
+            peer_key = str(contact["public_key"]) if contact else None
+            await handler(
+                InboundMessage(
+                    kind="direct",
+                    peer_key=peer_key,
+                    peer_key_prefix=prefix,
+                    text=str(payload.get("text", "")),
+                    mesh_timestamp=payload.get("sender_timestamp"),
+                    snr=payload.get("SNR"),
+                    path_length=payload.get("path_len"),
+                    text_type=payload.get("txt_type"),
+                )
+            )
+
+        async def channel_message(event: Any) -> None:
+            payload = event.payload
+            await handler(
+                InboundMessage(
+                    kind="channel",
+                    channel_index=payload.get("channel_idx"),
+                    text=str(payload.get("text", "")),
+                    mesh_timestamp=payload.get("sender_timestamp"),
+                    snr=payload.get("SNR"),
+                    path_length=payload.get("path_len"),
+                    text_type=payload.get("txt_type"),
+                )
+            )
+
+        self._message_subscriptions = [
+            self.client.subscribe(EventType.CONTACT_MSG_RECV, direct_message),
+            self.client.subscribe(EventType.CHANNEL_MSG_RECV, channel_message),
+        ]
+        await self.client.start_auto_message_fetching()
+        self._receiving = True
+
+    async def stop_receiving(self) -> None:
+        if self._receiving:
+            await self.client.stop_auto_message_fetching()
+        for subscription in self._message_subscriptions:
+            self.client.unsubscribe(subscription)
+        self._message_subscriptions = []
+        self._receiving = False
+
     async def disconnect(self) -> None:
+        await self.stop_receiving()
         await self.client.disconnect()
 
 
@@ -154,10 +213,12 @@ class RadioManager:
         *,
         discoverer: Discoverer = discover_serial_device,
         connector: Connector = connect_meshcore,
+        message_handler: InboundHandler | None = None,
     ) -> None:
         self.settings = settings
         self._discoverer = discoverer
         self._connector = connector
+        self._message_handler = message_handler
         self._status = RadioStatus(serial_port=settings.serial_port)
         self._contacts: list[ContactRecord] = []
         self._channels: list[ChannelRecord] = []
@@ -207,6 +268,8 @@ class RadioManager:
                 backend = await self._connector(device.port, self.settings.query_timeout_seconds)
                 self._backend = backend
                 await self._refresh(device, backend)
+                if self._message_handler is not None:
+                    await backend.start_receiving(self._message_handler)
                 delay = self.settings.reconnect_initial_seconds
                 while not self._stop.is_set():
                     await self._wait(self.settings.refresh_interval_seconds)
