@@ -97,6 +97,18 @@ tools against a supervised `meshpincerd` instance and attached Wio. Restrictive
 OpenClaw tool profiles must explicitly allow the implemented MeshPincer tools;
 see the [plugin README](openclaw-plugin/README.md).
 
+The native `meshcore` channel is installed and connected in the same Gateway.
+It consumes direct-message events through an independent durable cursor, maps
+peers by full public key, starts new installations at the current event head,
+and permits inbound turns only from explicitly configured public keys. Native
+channel replies use the daemon's acknowledged direct-send path and remain
+subject to its route, length, and cooldown safeguards.
+
+Native replies aim for at most 75 UTF-8 bytes and use fewer whenever possible.
+The firmware's 160-byte text maximum is enforced as a hard encoded-byte limit,
+not treated as a normal response length. Uncertain acknowledgements are logged
+locally and never generate automatic explanatory radio traffic or retries.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

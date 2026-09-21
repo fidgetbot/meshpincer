@@ -20,6 +20,54 @@
   "activation": {
     "onStartup": true
   },
+  "channels": [
+    "meshcore"
+  ],
+  "channelConfigs": {
+    "meshcore": {
+      "label": "MeshCore",
+      "description": "Native direct OpenClaw conversations over MeshCore via MeshPincer.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "socketPath": {
+            "type": "string",
+            "description": "Path to the meshpincerd Unix-domain socket."
+          },
+          "consumerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "default": "native-channel"
+          },
+          "startAtLatest": {
+            "type": "boolean",
+            "default": true,
+            "description": "Baseline a new channel consumer at the current event head."
+          },
+          "pollIntervalMs": {
+            "type": "integer",
+            "minimum": 250,
+            "maximum": 60000,
+            "default": 1000
+          },
+          "allowDirectFrom": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{64}$"
+            },
+            "default": [],
+            "description": "MeshCore public keys allowed to start native OpenClaw DM turns."
+          }
+        }
+      }
+    }
+  },
   "contracts": {
     "tools": [
       "meshcore_status",

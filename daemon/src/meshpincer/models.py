@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DeliveryState(StrEnum):
@@ -132,9 +132,16 @@ class AdvanceCursorRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=160)
+    text: str = Field(min_length=1)
     public_key: str | None = Field(default=None, pattern=r"^[0-9A-Fa-f]{64}$")
     channel_index: int | None = Field(default=None, ge=0)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 160:
+            raise ValueError("text must be at most 160 UTF-8 bytes")
+        return value
 
 
 class SendMessageResult(BaseModel):

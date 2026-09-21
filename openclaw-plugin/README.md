@@ -36,6 +36,23 @@ batch read implicitly: after an agent successfully processes a response, it
 passes the last event ID back as `acknowledgeThroughEventId` on its next call.
 Set `mode` to `history` for an explicit message-ID-based history query.
 
+## Native MeshCore channel
+
+The same package registers the `meshcore` channel. Its initial implementation
+supports direct messages only. Each peer is identified by its complete public
+key, and inbound peers must be listed under `channels.meshcore.allowDirectFrom`.
+The channel uses a consumer cursor separate from the operator inbox and, by
+default, baselines a new installation at the latest recorded event so old radio
+traffic cannot trigger agent turns.
+
+Replies use the fewest words that answer the request and target at most 75
+UTF-8 bytes. The current MeshCore firmware ceiling is 160 UTF-8 bytes, which
+MeshPincer enforces without splitting multi-byte characters. That ceiling is a
+compatibility boundary, not an invitation to fill every packet. The daemon's
+known-contact, zero-hop route, cooldown, and no-flood rules continue to apply.
+If a reply is transmitted but its ACK is uncertain, the native channel records
+that state locally and does not send a second explanatory message or auto-retry.
+
 ## Build
 
 ```bash

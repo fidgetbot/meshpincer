@@ -89,5 +89,30 @@ path also fails closed for unknown contacts and non-zero-hop routes, limits
 message length, serializes radio operations, and enforces global and per-peer
 cooldowns before transmission.
 
+### Native OpenClaw channel acceptance
+
+The installed `meshcore` channel was baselined at the current durable event
+head, then received a new direct message from the allowlisted second companion.
+It created a stable OpenClaw conversation keyed by the peer's full public key,
+ran an agent turn, submitted a direct reply through `meshpincerd`, and advanced
+its channel cursor without activating on ambient Public-channel traffic.
+
+The first reply was transmitted but did not receive an ACK within the
+firmware-suggested window. OpenClaw's generic delivery recovery then generated
+a second explanatory message; that message reached the pager but also lacked a
+recorded ACK. This proved the complete inbound-agent-outbound RF path, while
+exposing behavior that is inappropriate for scarce LoRa airtime. MeshPincer's
+native channel now treats a timed-out ACK as a locally recorded uncertain
+outcome: it logs the state and neither emits explanatory RF traffic nor retries
+automatically. Operator-initiated sends continue to report timed-out delivery
+explicitly.
+
+The same acceptance test prompted a payload-policy correction. Companion
+firmware v1.17.1 limits text with `MAX_TEXT_LEN` to 160 UTF-8 bytes, not 160
+Unicode characters. MeshPincer now enforces that encoded-byte ceiling and
+guides agents toward at most 75 UTF-8 bytes for ordinary replies. With the
+five-byte direct-message text header, 75 bytes fills exactly five AES blocks;
+76 bytes requires a sixth block.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

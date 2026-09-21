@@ -35,6 +35,15 @@
     },
     "build": {
       "openclawVersion": "2026.9.3"
+    },
+    "channel": {
+      "id": "meshcore",
+      "label": "MeshCore",
+      "selectionLabel": "MeshCore",
+      "detailLabel": "MeshCore via MeshPincer",
+      "docsLabel": "MeshPincer",
+      "docsPath": "/channels/meshcore",
+      "blurb": "Direct OpenClaw conversations over MeshCore radio."
     }
   }
 }

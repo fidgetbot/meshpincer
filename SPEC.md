@@ -139,6 +139,10 @@ The transmit path must implement the project policy in
   authenticated OpenClaw boundary. High-impact operations require confirmation.
 - Automated identity and delivery state are clear. Transmission is never
   presented as acknowledgement, and retry exhaustion is reported honestly.
+- Native agent replies target at most 75 UTF-8 bytes and use fewer when useful;
+  160 UTF-8 bytes is a hard firmware ceiling. Limits are measured after UTF-8
+  encoding, and delivery uncertainty never triggers explanatory RF traffic or
+  an automatic resend.
 - Cross-network forwarding always has an explicit destination and does not
   mirror private content or precise coordinates by default.
 - Transmission fails closed until frequency, power, duty cycle, regional scope,
@@ -205,6 +209,18 @@ their daemon implementation and read/change/read-back proof are complete.
 - Map configured MeshCore channels to OpenClaw group conversations
 - Resume inbound delivery from durable event cursors after restarts
 - Apply LoRa-aware chunking and reply routing
+
+Status as of 2026-09-20: the direct-message channel is implemented, installed,
+and connected in a live OpenClaw Gateway. It uses a dedicated durable consumer
+cursor, baselines a new consumer at the current event head, maps conversations
+by full peer public key, and advances only after successful dispatch. Inbound
+DMs are allowlisted by public key. Replies are normalized to one concise radio
+message and delivered through the daemon's acknowledged zero-hop send path.
+The first live inbound DM created the expected stable OpenClaw conversation and
+produced an RF reply. That test also proved that a generic delivery-recovery
+message can waste airtime when an ACK is uncertain, so native replies now keep
+timeout diagnostics local and do not automatically resend. Configured MeshCore
+group-channel conversations remain to be implemented.
 
 ## Verification requirements
 

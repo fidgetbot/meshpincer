@@ -16,6 +16,13 @@ than a LoRa network can carry it, so a good agent is intentionally quiet.
    equivalent work, batch updates, keep replies concise, and emit changed or
    actionable information instead of raw telemetry dumps.
 
+   For ordinary agent replies, aim for at most **75 UTF-8 bytes** and use fewer
+   whenever the answer remains useful. MeshCore's current text ceiling is 160
+   UTF-8 bytes; that is a protocol limit, not a writing target. The 75-byte DM
+   target plus MeshCore's five bytes of text metadata fits exactly five AES
+   blocks. At 76 bytes, encryption needs a sixth block. Group messages must
+   also budget for the visible `<sender>: ` prefix inside the same text limit.
+
 4. **Observe before probing.** Read local radio health and passively received
    traffic first. Remote telemetry, path discovery, neighbor sweeps, and adverts
    spend airtime; run them only on explicit demand or a conservative schedule.
@@ -30,7 +37,9 @@ than a LoRa network can carry it, so a good agent is intentionally quiet.
 6. **Be transparent and honest.** Identify automated responders, make them easy
    to silence, and report `queued`, `transmitted`, `acknowledged`, `timed out`,
    or `failed` accurately. Never imply delivery from transmission alone, and do
-   not present an experimental mesh agent as an emergency service.
+   not present an experimental mesh agent as an emergency service. Keep
+   delivery diagnostics local: an uncertain ACK must not trigger a second,
+   explanatory RF message or an automatic resend.
 
 7. **Bridge deliberately.** Do not mirror private messages, precise locations,
    or whole conversations between MeshCore and internet services by default.
@@ -49,6 +58,8 @@ Before unattended transmit is enabled, MeshPincer must provide:
 - global, per-destination, and per-channel rate limits plus bounded retry and
   queue policies;
 - duplicate suppression, concise output limits, and backpressure;
+- a default agent target of 75 UTF-8 bytes and a hard 160-byte text limit,
+  enforced by encoded byte length rather than character count;
 - passive-by-default diagnostics and disabled automatic startup adverts;
 - public-key-based authorization for RF callers and authenticated local access;
 - typed, validated administration operations with auditable outcomes;
@@ -59,6 +70,9 @@ Before unattended transmit is enabled, MeshPincer must provide:
 
 ## References
 
+- [MeshCore companion v1.17.1 text limit (`MAX_TEXT_LEN`)](https://github.com/meshcore-dev/MeshCore/blob/companion-v1.17.1/src/helpers/BaseChatMesh.h)
+- [MeshCore text and group-message composition](https://github.com/meshcore-dev/MeshCore/blob/companion-v1.17.1/src/helpers/BaseChatMesh.cpp)
+- [MeshCore issue #2583: byte budgets for group messages](https://github.com/meshcore-dev/MeshCore/issues/2583)
 - [MeshCore FAQ: path learning and channel flooding](https://docs.meshcore.io/faq/#54-q-how-does-a-node-discover-a-path-to-its-destination-and-then-use-it-to-send-messages-in-the-future-instead-of-flooding-every-message-it-sends-like-meshtastic)
 - [LoRa Project: MeshCore bot etiquette and regional scopes](https://loraproject.ie/bots/)
 - [MeshCore Bot: congestion, hop limits, and rate limiting](https://github.com/agessaman/meshcore-bot)

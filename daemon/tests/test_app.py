@@ -183,3 +183,18 @@ async def test_direct_send_records_acknowledged_delivery(settings: Settings) -> 
         "message.transmitted",
         "message.acknowledged",
     ]
+
+
+@pytest.mark.asyncio
+async def test_direct_send_rejects_more_than_160_utf8_bytes(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/messages/direct",
+                json={"public_key": "ab" * 32, "text": "🙂" * 41},
+            )
+
+    assert response.status_code == 422
+    assert "160 UTF-8 bytes" in response.text
