@@ -100,6 +100,12 @@ only after successful processing. Cursor movement is monotonic, yielding
 at-least-once delivery without allowing a consumer to skip beyond the newest
 recorded event.
 
+The initial direct-send path is deliberately narrow: a known full public key,
+a learned zero-hop route, at most 160 characters, one transmission, no flood
+fallback, and global plus per-peer cooldowns. It atomically records queued,
+transmitted, and acknowledged or timed-out delivery events and correlates the
+four-byte ACK code returned by the companion protocol.
+
 ## Identity and display names
 
 - The companion radio owns the cryptographic node identity and device/advert
@@ -168,7 +174,9 @@ are implemented and covered by deterministic tests, including restart and
 concurrent-redelivery cases. Public-channel reception and an encrypted direct
 message from a second physical node have now been proven through the packaged
 daemon, including full-public-key sender resolution and persistence across a
-clean daemon restart. RF send/acknowledgement acceptance remains open. See
+clean daemon restart. A single zero-hop direct message was transmitted through
+the daemon and acknowledged with the expected ACK code, without retry or flood
+fallback. See
 [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ### M2 — operator tools

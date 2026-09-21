@@ -98,6 +98,7 @@ class MessageRecord(BaseModel):
     snr: float | None = None
     path_length: int | None = None
     text_type: int | None = None
+    ack_code: str | None = None
     recorded_at: datetime
     delivery_state: DeliveryState
 
@@ -131,14 +132,15 @@ class AdvanceCursorRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=1024)
-    public_key: str | None = None
+    text: str = Field(min_length=1, max_length=160)
+    public_key: str | None = Field(default=None, pattern=r"^[0-9A-Fa-f]{64}$")
     channel_index: int | None = Field(default=None, ge=0)
 
 
 class SendMessageResult(BaseModel):
     message_id: int
     delivery_state: DeliveryState
+    ack_code: str | None = None
 
 
 class RepeaterConfigRequest(BaseModel):

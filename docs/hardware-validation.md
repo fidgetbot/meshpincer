@@ -75,9 +75,19 @@ preserved that as a separate protocol message. Exact redelivery of the same
 protocol identity is deduplicated; distinct sender timestamps are retained so
 an intentional repeated message is not silently discarded.
 
-The remaining M1 RF acceptance work is outbound transmission and
-acknowledgement correlation. MeshPincer itself transmitted no advert, channel
-message, or direct message during this receive test.
+### Two-node send and acknowledgement acceptance
+
+After explicit operator authorization, MeshPincer sent one short direct
+message to the second companion over its verified zero-hop route. The daemon
+performed exactly one transmission: automatic retry, flood fallback, channel
+send, and advert were all disabled for the test. It durably recorded queued,
+transmitted, and acknowledged events, and the acknowledgement matched the
+four-byte code returned when the companion accepted the send command.
+
+This completes the direct-message RF send/acknowledgement case. The production
+path also fails closed for unknown contacts and non-zero-hop routes, limits
+message length, serializes radio operations, and enforces global and per-peer
+cooldowns before transmission.
 
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

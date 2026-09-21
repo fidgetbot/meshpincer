@@ -20,12 +20,15 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_REFRESH_INTERVAL` — read-only snapshot interval in seconds
 - `MESHPINCER_RECONNECT_INITIAL` and `MESHPINCER_RECONNECT_MAX` — reconnect
   backoff bounds in seconds
+- `MESHPINCER_DIRECT_GLOBAL_COOLDOWN` and
+  `MESHPINCER_DIRECT_PEER_COOLDOWN` — minimum seconds between direct sends
+  globally and to the same peer (defaults: 5 and 30)
 
 When no serial override is set, discovery matches the configured USB identity
 and fails closed if more than one radio matches without a configured hardware
 serial.
 
-Implemented read-only and replay endpoints:
+Implemented endpoints:
 
 - `GET /v1/status`
 - `GET /v1/contacts`
@@ -36,6 +39,7 @@ Implemented read-only and replay endpoints:
 - `GET /v1/consumers/{consumer_id}/events?limit=<n>`
 - `GET /v1/consumers/{consumer_id}/cursor`
 - `PUT /v1/consumers/{consumer_id}/cursor`
+- `POST /v1/messages/direct`
 
 The daemon auto-fetches direct and channel messages while connected. It writes
 each normalized inbound message and its `message.received` event atomically,
@@ -43,6 +47,13 @@ deduplicates protocol redelivery, and maintains independent monotonic cursors
 for consumers such as operator tools and the native MeshCore channel. Consumers
 advance their cursor after processing, so unacknowledged events replay after a
 restart.
+
+Direct sends require a known contact with a zero-hop route, accept at most 160
+characters, and perform one transmission with no retry or flood fallback. The
+daemon persists `queued`, `transmitted`, and `acknowledged` or `timed_out`
+delivery events, correlates the companion's expected ACK code, serializes
+radio operations, and enforces global and per-peer cooldowns before
+transmission.
 
 The API never returns channel secrets, USB hardware serials, or stored contact
 coordinates.

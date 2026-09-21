@@ -5,7 +5,13 @@ import pytest
 
 from meshpincer.app import create_app
 from meshpincer.config import Settings
-from meshpincer.models import ChannelRecord, ContactRecord, InboundMessage, RadioStatus
+from meshpincer.models import (
+    ChannelRecord,
+    ContactRecord,
+    InboundMessage,
+    RadioStatus,
+)
+from meshpincer.radio import DirectSendOutcome
 from meshpincer.store import Store
 
 
@@ -31,6 +37,16 @@ class FakeRadioManager:
             ChannelRecord(index=1, name="", configured=False, channel_hash="37"),
         ]
         return channels if include_empty else channels[:1]
+
+    async def send_direct(self, public_key: str, text: str, on_transmitted):
+        assert public_key == "ab" * 32
+        assert text == "one controlled send"
+        await on_transmitted("01020304")
+        return DirectSendOutcome(
+            ack_code="01020304",
+            acknowledged=True,
+            trip_time_ms=42,
+        )
 
 
 @pytest.fixture
@@ -139,3 +155,31 @@ async def test_events_and_consumer_cursor_api(settings: Settings) -> None:
     }
     assert no_pending.json() == []
     assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_direct_send_records_acknowledged_delivery(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/v1/messages/direct",
+                json={"public_key": "ab" * 32, "text": "one controlled send"},
+            )
+            messages = await client.get("/v1/messages")
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message_id": 1,
+        "delivery_state": "acknowledged",
+        "ack_code": "01020304",
+    }
+    assert messages.json()[0]["delivery_state"] == "acknowledged"
+    assert messages.json()[0]["ack_code"] == "01020304"
+    assert [event["kind"] for event in events.json()] == [
+        "message.queued",
+        "message.transmitted",
+        "message.acknowledged",
+    ]

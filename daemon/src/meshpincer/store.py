@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS messages (
     snr REAL,
     path_length INTEGER,
     text_type INTEGER,
+    ack_code TEXT,
     recorded_at TEXT NOT NULL,
     delivery_state TEXT NOT NULL
 );
@@ -56,6 +57,7 @@ MESSAGE_MIGRATIONS = {
     "snr": "ALTER TABLE messages ADD COLUMN snr REAL",
     "path_length": "ALTER TABLE messages ADD COLUMN path_length INTEGER",
     "text_type": "ALTER TABLE messages ADD COLUMN text_type INTEGER",
+    "ack_code": "ALTER TABLE messages ADD COLUMN ack_code TEXT",
 }
 
 POST_MIGRATION_SCHEMA = """
@@ -177,7 +179,7 @@ class Store:
                 """
                 SELECT id, event_id, direction, kind, peer_key, peer_key_prefix,
                        channel_index, text, mesh_timestamp, snr, path_length,
-                       text_type, recorded_at, delivery_state
+                       text_type, ack_code, recorded_at, delivery_state
                 FROM messages
                 WHERE id > ?
                 ORDER BY id ASC
@@ -187,6 +189,102 @@ class Store:
             )
             rows = await cursor.fetchall()
         return [_message_from_row(row) for row in rows]
+
+    async def queue_outbound_direct(self, public_key: str, text: str) -> MessageRecord:
+        recorded_at = datetime.now(UTC)
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                """
+                INSERT INTO messages(
+                    event_id, dedupe_key, direction, kind, peer_key, peer_key_prefix,
+                    channel_index, text, mesh_timestamp, snr, path_length, text_type,
+                    ack_code, recorded_at, delivery_state
+                ) VALUES (NULL, NULL, 'outbound', 'direct', ?, ?, NULL, ?, NULL, NULL,
+                          NULL, 0, NULL, ?, ?)
+                """,
+                (
+                    public_key.lower(),
+                    public_key[:12].lower(),
+                    text,
+                    recorded_at.isoformat(),
+                    DeliveryState.QUEUED.value,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("outbound message insert did not return an id")
+            message_id = int(cursor.lastrowid)
+            event_id = await _insert_delivery_event(
+                db,
+                message_id=message_id,
+                state=DeliveryState.QUEUED,
+                recorded_at=recorded_at,
+            )
+            await db.execute(
+                "UPDATE messages SET event_id = ? WHERE id = ?",
+                (event_id, message_id),
+            )
+            cursor = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+            row = await cursor.fetchone()
+            await db.commit()
+        if row is None:
+            raise RuntimeError("queued outbound message could not be read back")
+        return _message_from_row(row)
+
+    async def transition_outbound(
+        self,
+        message_id: int,
+        state: DeliveryState,
+        *,
+        ack_code: str | None = None,
+    ) -> MessageRecord:
+        allowed = {
+            DeliveryState.QUEUED: {DeliveryState.TRANSMITTED, DeliveryState.FAILED},
+            DeliveryState.TRANSMITTED: {
+                DeliveryState.ACKNOWLEDGED,
+                DeliveryState.TIMED_OUT,
+                DeliveryState.FAILED,
+            },
+        }
+        recorded_at = datetime.now(UTC)
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT * FROM messages WHERE id = ? AND direction = 'outbound'",
+                (message_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await db.rollback()
+                raise ValueError(f"outbound message {message_id} was not found")
+            current = DeliveryState(row["delivery_state"])
+            if state not in allowed.get(current, set()):
+                await db.rollback()
+                raise ValueError(f"invalid outbound transition: {current.value} -> {state.value}")
+            resolved_ack = ack_code or row["ack_code"]
+            await db.execute(
+                "UPDATE messages SET delivery_state = ?, ack_code = ? WHERE id = ?",
+                (state.value, resolved_ack, message_id),
+            )
+            event_id = await _insert_delivery_event(
+                db,
+                message_id=message_id,
+                state=state,
+                recorded_at=recorded_at,
+                ack_code=resolved_ack,
+            )
+            await db.execute(
+                "UPDATE messages SET event_id = ? WHERE id = ?",
+                (event_id, message_id),
+            )
+            cursor = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+            updated = await cursor.fetchone()
+            await db.commit()
+        if updated is None:
+            raise RuntimeError("updated outbound message could not be read back")
+        return _message_from_row(updated)
 
     async def list_events(self, after_id: int, limit: int) -> list[EventRecord]:
         async with aiosqlite.connect(self.path) as db:
@@ -273,6 +371,34 @@ def _inbound_dedupe_key(message: InboundMessage) -> str:
     return sha256(canonical.encode()).hexdigest()
 
 
+async def _insert_delivery_event(
+    db: aiosqlite.Connection,
+    *,
+    message_id: int,
+    state: DeliveryState,
+    recorded_at: datetime,
+    ack_code: str | None = None,
+) -> int:
+    payload: dict[str, Any] = {
+        "message_id": message_id,
+        "direction": "outbound",
+        "delivery_state": state.value,
+    }
+    if ack_code is not None:
+        payload["ack_code"] = ack_code
+    cursor = await db.execute(
+        "INSERT INTO events(kind, payload_json, recorded_at) VALUES (?, ?, ?)",
+        (
+            f"message.{state.value}",
+            json.dumps(payload, separators=(",", ":")),
+            recorded_at.isoformat(),
+        ),
+    )
+    if cursor.lastrowid is None:
+        raise RuntimeError("delivery event insert did not return an id")
+    return int(cursor.lastrowid)
+
+
 def _message_from_row(row: aiosqlite.Row) -> MessageRecord:
     return MessageRecord(
         id=row["id"],
@@ -287,6 +413,7 @@ def _message_from_row(row: aiosqlite.Row) -> MessageRecord:
         snr=row["snr"],
         path_length=row["path_length"],
         text_type=row["text_type"],
+        ack_code=row["ack_code"],
         recorded_at=datetime.fromisoformat(row["recorded_at"]),
         delivery_state=DeliveryState(row["delivery_state"]),
     )

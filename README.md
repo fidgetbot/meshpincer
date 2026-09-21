@@ -86,8 +86,10 @@ have processed them, providing at-least-once delivery across restarts.
 
 The receive path has been proven over RF with a second physical MeshCore node:
 both channel traffic and an encrypted direct message survived a clean daemon
-restart with stable message and event IDs. Outbound send and acknowledgement
-correlation are the remaining M1 radio acceptance cases.
+restart with stable message and event IDs. A single zero-hop outbound DM was
+also transmitted and acknowledged without retry or flood fallback. The daemon
+durably records each delivery-state transition and enforces direct-message
+length and cooldown limits before transmission.
 
 ## Project status
 

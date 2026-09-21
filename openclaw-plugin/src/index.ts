@@ -68,7 +68,7 @@ export default defineToolPlugin({
       description: "Send a direct or channel message over MeshCore.",
       parameters: Type.Object({
         kind: Type.Union([Type.Literal("direct"), Type.Literal("channel")]),
-        text: Type.String({ minLength: 1, maxLength: 1024 }),
+        text: Type.String({ minLength: 1, maxLength: 160 }),
         publicKey: Type.Optional(Type.String()),
         channelIndex: Type.Optional(Type.Integer({ minimum: 0 })),
       }),

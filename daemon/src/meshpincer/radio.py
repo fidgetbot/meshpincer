@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -33,12 +34,31 @@ class RadioBackend(Protocol):
 
     async def start_receiving(self, handler: InboundHandler) -> None: ...
 
+    async def send_direct(
+        self,
+        public_key: str,
+        text: str,
+        on_transmitted: TransmittedHandler,
+    ) -> DirectSendOutcome: ...
+
     async def disconnect(self) -> None: ...
 
 
 Discoverer = Callable[[Settings], SerialDevice]
 Connector = Callable[[str, float], Awaitable[RadioBackend]]
 InboundHandler = Callable[[InboundMessage], Awaitable[Any]]
+TransmittedHandler = Callable[[str], Awaitable[Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSendOutcome:
+    ack_code: str
+    acknowledged: bool
+    trip_time_ms: int | None = None
+
+
+class SendPolicyError(ValueError):
+    pass
 
 
 def _event_payload(event: Any, operation: str) -> dict[str, Any]:
@@ -167,6 +187,57 @@ class MeshCoreBackend:
         await self.client.start_auto_message_fetching()
         self._receiving = True
 
+    async def send_direct(
+        self,
+        public_key: str,
+        text: str,
+        on_transmitted: TransmittedHandler,
+    ) -> DirectSendOutcome:
+        loop = asyncio.get_running_loop()
+        acknowledged: asyncio.Future[int | None] = loop.create_future()
+        early_acks: dict[str, int | None] = {}
+        expected_ack: str | None = None
+
+        def on_ack(event: Any) -> None:
+            nonlocal expected_ack
+            code = str(event.attributes.get("code", ""))
+            trip_time = event.payload.get("trip_time") if isinstance(event.payload, dict) else None
+            if expected_ack is not None and code == expected_ack:
+                if not acknowledged.done():
+                    acknowledged.set_result(trip_time)
+            else:
+                early_acks[code] = trip_time
+
+        subscription = self.client.subscribe(EventType.ACK, on_ack)
+        try:
+            event = await self.client.commands.send_msg(
+                public_key,
+                text,
+                attempt=0,
+            )
+            payload = _event_payload(event, "direct message send")
+            if int(payload.get("type", -1)) != 0:
+                raise ConnectionError("device used flood routing for a direct-only send")
+            raw_ack = payload.get("expected_ack")
+            expected_ack = raw_ack.hex() if isinstance(raw_ack, bytes) else str(raw_ack)
+            if not expected_ack:
+                raise ConnectionError("direct message send returned no ACK code")
+            await on_transmitted(expected_ack)
+            if expected_ack in early_acks and not acknowledged.done():
+                acknowledged.set_result(early_acks[expected_ack])
+            timeout = max(float(payload.get("suggested_timeout", 0)) / 1000 * 1.2, 1.0)
+            try:
+                trip_time = await asyncio.wait_for(asyncio.shield(acknowledged), timeout)
+            except TimeoutError:
+                return DirectSendOutcome(ack_code=expected_ack, acknowledged=False)
+            return DirectSendOutcome(
+                ack_code=expected_ack,
+                acknowledged=True,
+                trip_time_ms=trip_time,
+            )
+        finally:
+            subscription.unsubscribe()
+
     async def stop_receiving(self) -> None:
         if self._receiving:
             await self.client.stop_auto_message_fetching()
@@ -226,6 +297,9 @@ class RadioManager:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._lock = asyncio.Lock()
+        self._operation_lock = asyncio.Lock()
+        self._last_direct_send = float("-inf")
+        self._last_direct_send_by_peer: dict[str, float] = {}
 
     async def start(self) -> None:
         if self._task is None:
@@ -260,6 +334,48 @@ class RadioManager:
             )
             return [channel.model_copy(deep=True) for channel in channels]
 
+    async def send_direct(
+        self,
+        public_key: str,
+        text: str,
+        on_transmitted: TransmittedHandler,
+    ) -> DirectSendOutcome:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            async with self._lock:
+                backend = self._backend
+                connected = self._status.connected
+                contact = next(
+                    (item for item in self._contacts if item.public_key.lower() == normalized_key),
+                    None,
+                )
+            if not connected or backend is None:
+                raise ConnectionError("MeshCore radio is not connected")
+            if contact is None:
+                raise ValueError("direct-message recipient is not a known contact")
+            if contact.path_length != 0:
+                raise ValueError("direct-only send requires a learned zero-hop route")
+            now = asyncio.get_running_loop().time()
+            global_remaining = (
+                self._last_direct_send + self.settings.direct_global_cooldown_seconds - now
+            )
+            peer_remaining = (
+                self._last_direct_send_by_peer.get(normalized_key, float("-inf"))
+                + self.settings.direct_peer_cooldown_seconds
+                - now
+            )
+            remaining = max(global_remaining, peer_remaining)
+            if remaining > 0:
+                raise SendPolicyError(f"direct-message cooldown active for {remaining:.1f}s")
+
+            async def mark_transmitted(ack_code: str) -> None:
+                sent_at = asyncio.get_running_loop().time()
+                self._last_direct_send = sent_at
+                self._last_direct_send_by_peer[normalized_key] = sent_at
+                await on_transmitted(ack_code)
+
+            return await backend.send_direct(normalized_key, text, mark_transmitted)
+
     async def _run(self) -> None:
         delay = self.settings.reconnect_initial_seconds
         while not self._stop.is_set():
@@ -287,9 +403,10 @@ class RadioManager:
                 delay = min(delay * 2, self.settings.reconnect_max_seconds)
 
     async def _refresh(self, device: SerialDevice, backend: RadioBackend) -> None:
-        payloads, max_channels = await backend.read_status()
-        contacts = await backend.read_contacts()
-        channels = await backend.read_channels(max_channels)
+        async with self._operation_lock:
+            payloads, max_channels = await backend.read_status()
+            contacts = await backend.read_contacts()
+            channels = await backend.read_channels(max_channels)
         self_info = payloads["self"]
         device_info = payloads["device"]
         battery = payloads["battery"]

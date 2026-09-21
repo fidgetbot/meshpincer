@@ -11,6 +11,7 @@ from .models import (
     ChannelRecord,
     ConsumerCursor,
     ContactRecord,
+    DeliveryState,
     EventRecord,
     MessageRecord,
     RepeaterConfigRequest,
@@ -18,7 +19,7 @@ from .models import (
     SendMessageResult,
     ServiceStatus,
 )
-from .radio import RadioManager
+from .radio import RadioManager, SendPolicyError
 from .store import Store
 
 
@@ -109,7 +110,62 @@ def create_app(
     async def send_direct(request: SendMessageRequest) -> SendMessageResult:
         if not request.public_key:
             raise HTTPException(status_code=422, detail="public_key is required")
-        raise HTTPException(status_code=503, detail="radio integration is not configured")
+        message = await store.queue_outbound_direct(request.public_key, request.text)
+
+        async def mark_transmitted(ack_code: str) -> None:
+            await store.transition_outbound(
+                message.id,
+                state=DeliveryState.TRANSMITTED,
+                ack_code=ack_code,
+            )
+
+        try:
+            outcome = await radio.send_direct(
+                request.public_key,
+                request.text,
+                mark_transmitted,
+            )
+        except SendPolicyError as exc:
+            failed = await store.transition_outbound(
+                message.id,
+                state=DeliveryState.FAILED,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            failed = await store.transition_outbound(
+                message.id,
+                state=DeliveryState.FAILED,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+        except Exception as exc:
+            failed = await store.transition_outbound(
+                message.id,
+                state=DeliveryState.FAILED,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={"message_id": failed.id, "reason": str(exc)},
+            ) from exc
+
+        final_state = (
+            DeliveryState.ACKNOWLEDGED if outcome.acknowledged else DeliveryState.TIMED_OUT
+        )
+        final = await store.transition_outbound(
+            message.id,
+            state=final_state,
+            ack_code=outcome.ack_code,
+        )
+        return SendMessageResult(
+            message_id=final.id,
+            delivery_state=final.delivery_state,
+            ack_code=final.ack_code,
+        )
 
     @app.post("/v1/messages/channel", response_model=SendMessageResult)
     async def send_channel(request: SendMessageRequest) -> SendMessageResult:

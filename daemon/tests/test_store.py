@@ -163,5 +163,37 @@ async def test_initialize_migrates_the_original_message_schema(tmp_path: Path) -
         "snr",
         "path_length",
         "text_type",
+        "ack_code",
     } <= columns
     assert cursor_table is not None
+
+
+async def test_outbound_delivery_transitions_are_durable(store: Store) -> None:
+    queued = await store.queue_outbound_direct("ab" * 32, "one controlled send")
+    transmitted = await store.transition_outbound(
+        queued.id,
+        DeliveryState.TRANSMITTED,
+        ack_code="01020304",
+    )
+    acknowledged = await store.transition_outbound(
+        queued.id,
+        DeliveryState.ACKNOWLEDGED,
+    )
+
+    assert queued.delivery_state == DeliveryState.QUEUED
+    assert transmitted.delivery_state == DeliveryState.TRANSMITTED
+    assert transmitted.ack_code == "01020304"
+    assert acknowledged.delivery_state == DeliveryState.ACKNOWLEDGED
+    assert acknowledged.ack_code == "01020304"
+    assert [event.kind for event in await store.list_events(0, 100)] == [
+        "message.queued",
+        "message.transmitted",
+        "message.acknowledged",
+    ]
+
+
+async def test_outbound_delivery_rejects_invalid_transition(store: Store) -> None:
+    queued = await store.queue_outbound_direct("ab" * 32, "one controlled send")
+
+    with pytest.raises(ValueError, match="queued -> acknowledged"):
+        await store.transition_outbound(queued.id, DeliveryState.ACKNOWLEDGED)

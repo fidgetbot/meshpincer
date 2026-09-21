@@ -26,6 +26,8 @@ class Settings:
     refresh_interval_seconds: float = 30.0
     reconnect_initial_seconds: float = 1.0
     reconnect_max_seconds: float = 30.0
+    direct_global_cooldown_seconds: float = 5.0
+    direct_peer_cooldown_seconds: float = 30.0
 
     @property
     def database_path(self) -> Path:
@@ -46,4 +48,10 @@ class Settings:
             refresh_interval_seconds=float(os.environ.get("MESHPINCER_REFRESH_INTERVAL", "30")),
             reconnect_initial_seconds=float(os.environ.get("MESHPINCER_RECONNECT_INITIAL", "1")),
             reconnect_max_seconds=float(os.environ.get("MESHPINCER_RECONNECT_MAX", "30")),
+            direct_global_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_DIRECT_GLOBAL_COOLDOWN", "5")
+            ),
+            direct_peer_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_DIRECT_PEER_COOLDOWN", "30")
+            ),
         )

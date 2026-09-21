@@ -5,12 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from meshcore.events import EventType
+import pytest
+from meshcore.events import Event, EventType
 
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
 from meshpincer.models import InboundMessage
-from meshpincer.radio import MeshCoreBackend, RadioManager
+from meshpincer.radio import DirectSendOutcome, MeshCoreBackend, RadioManager, SendPolicyError
 from meshpincer.store import Store
 
 
@@ -18,6 +19,8 @@ class FakeBackend:
     def __init__(self) -> None:
         self.disconnected = False
         self.receiver = None
+        self.contact_path_length = 2
+        self.sent: list[tuple[str, str]] = []
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -61,7 +64,7 @@ class FakeBackend:
                 "adv_name": "Peer",
                 "type": 1,
                 "flags": 0,
-                "out_path_len": 2,
+                "out_path_len": self.contact_path_length,
                 "last_advert": 100,
                 "adv_lat": 47.1,
                 "adv_lon": -122.1,
@@ -93,6 +96,15 @@ class FakeBackend:
         if self.receiver is None:
             raise AssertionError("receive handler was not installed")
         await self.receiver(message)
+
+    async def send_direct(self, public_key: str, text: str, on_transmitted):
+        self.sent.append((public_key, text))
+        await on_transmitted("01020304")
+        return DirectSendOutcome(
+            ack_code="01020304",
+            acknowledged=True,
+            trip_time_ms=42,
+        )
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -308,3 +320,164 @@ async def test_meshcore_backend_normalizes_direct_and_channel_events() -> None:
             text_type=0,
         ),
     ]
+
+
+async def test_manager_allows_one_zero_hop_direct_send(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+    backend.contact_path_length = 0
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    states: list[str] = []
+
+    async def on_transmitted(ack_code: str) -> None:
+        states.append(ack_code)
+
+    try:
+        await wait_until_connected(manager)
+        outcome = await manager.send_direct(
+            "34" * 32,
+            "one controlled send",
+            on_transmitted,
+        )
+    finally:
+        await manager.stop()
+
+    assert backend.sent == [("34" * 32, "one controlled send")]
+    assert states == ["01020304"]
+    assert outcome.acknowledged
+
+
+async def test_manager_rejects_non_direct_route_before_transmit(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(ValueError, match="zero-hop"):
+            await manager.send_direct(
+                "34" * 32,
+                "must not transmit",
+                lambda _ack: asyncio.sleep(0),
+            )
+    finally:
+        await manager.stop()
+
+    assert backend.sent == []
+
+
+async def test_manager_rate_limits_repeated_direct_send(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        direct_global_cooldown_seconds=5,
+        direct_peer_cooldown_seconds=30,
+    )
+    backend = FakeBackend()
+    backend.contact_path_length = 0
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+
+    async def on_transmitted(_ack_code: str) -> None:
+        pass
+
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        await manager.send_direct("34" * 32, "first", on_transmitted)
+        with pytest.raises(SendPolicyError, match="cooldown"):
+            await manager.send_direct("34" * 32, "second", on_transmitted)
+    finally:
+        await manager.stop()
+
+    assert backend.sent == [("34" * 32, "first")]
+
+
+async def test_meshcore_backend_correlates_early_ack() -> None:
+    expected_ack = bytes.fromhex("01020304")
+
+    class FakeCommands:
+        def __init__(self, client) -> None:
+            self.client = client
+
+        async def send_msg(self, public_key: str, text: str, attempt: int):
+            assert public_key == "ab" * 32
+            assert text == "one controlled send"
+            assert attempt == 0
+            self.client.ack_callback(
+                Event(
+                    EventType.ACK,
+                    {"code": "01020304", "trip_time": 42},
+                    {"code": "01020304"},
+                )
+            )
+            return Event(
+                EventType.MSG_SENT,
+                {
+                    "type": 0,
+                    "expected_ack": expected_ack,
+                    "suggested_timeout": 100,
+                },
+            )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.ack_callback = None
+            self.commands = FakeCommands(self)
+
+        def subscribe(self, event_type, callback):
+            assert event_type == EventType.ACK
+            self.ack_callback = callback
+            return SimpleNamespace(unsubscribe=lambda: None)
+
+    backend = MeshCoreBackend(FakeClient(), timeout=5.0)  # type: ignore[arg-type]
+    transmitted: list[str] = []
+
+    async def on_transmitted(ack_code: str) -> None:
+        transmitted.append(ack_code)
+
+    outcome = await backend.send_direct(
+        "ab" * 32,
+        "one controlled send",
+        on_transmitted,
+    )
+
+    assert transmitted == ["01020304"]
+    assert outcome == DirectSendOutcome(
+        ack_code="01020304",
+        acknowledged=True,
+        trip_time_ms=42,
+    )
