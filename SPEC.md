@@ -2,10 +2,10 @@
 
 ## Product definition
 
-MeshPincer is a MeshCore operator and messaging integration for OpenClaw. An
-OpenClaw user can ask an agent to inspect messages, send direct or channel
-messages, query a companion radio, and administer known repeater nodes. The
-same radio service will later support MeshCore as a native OpenClaw channel.
+MeshPincer is built by an OpenClaw agent for other OpenClaw agents. It is a
+MeshCore operator and messaging integration that lets an agent inspect
+messages, send direct or channel messages, query a companion radio, administer
+known repeater nodes, and participate in MeshCore as a native OpenClaw channel.
 
 ## Initial hardware target
 
@@ -19,7 +19,7 @@ same radio service will later support MeshCore as a native OpenClaw channel.
 - Persist inbound and outbound messages independently of OpenClaw sessions.
 - Report delivery state as queued, transmitted, acknowledged, or timed out.
 - Expose typed OpenClaw tools for status, inbox, sending, and repeater admin.
-- Preserve an event-stream boundary suitable for a later channel adapter.
+- Expose a native MeshCore channel from the same durable event stream.
 - Identify contacts by MeshCore public key and channels by stable device slot.
 - Keep channel secrets and repeater credentials out of ordinary application
   logs and SQLite records.
@@ -42,8 +42,8 @@ and exposes a versioned API over a Unix-domain socket.
 
 ### OpenClaw plugin
 
-TypeScript plugin using the OpenClaw Plugin SDK and TypeBox. The first release
-registers these tool contracts:
+TypeScript plugin using the OpenClaw Plugin SDK and TypeBox. It registers these
+operator-tool contracts:
 
 - `meshcore_status`
 - `meshcore_messages`
@@ -51,8 +51,9 @@ registers these tool contracts:
 - `meshcore_repeater_status`
 - `meshcore_repeater_configure`
 
-A later plugin entry will implement the `meshcore` messaging channel using the
-same daemon API and event cursor.
+The same package provides the `meshcore` messaging channel using the daemon API
+and event cursor. Tool and channel delivery may be sequenced, but both are
+current product scope.
 
 ## Local API
 
@@ -95,6 +96,10 @@ Secrets are references or device-held values, not message-database columns.
   operator-specific names.
 
 ## Delivery milestones
+
+These milestones describe implementation order, not optional or future product
+scope. Operator tools and the native MeshCore channel are both part of
+MeshPincer.
 
 ### M0 — repository scaffold
 
