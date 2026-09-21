@@ -280,6 +280,26 @@ export function singleRadioReply(text: string): string {
   return `${truncated}${ellipsis}`;
 }
 
+const nativeReplyTooLong = "Reply too long. Ask again briefly.";
+
+export function nativeRadioReply(text: string): string | undefined {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+
+  // OpenClaw can mirror a pending delivery-recovery notice after a Gateway
+  // restart. That notice is local transport state, not a reply for scarce RF
+  // airtime. Treat it as successfully suppressed so it cannot consume the
+  // direct-message cooldown or block the actual agent reply that follows.
+  const isRestartRecovery =
+    /couldn['’]t confirm whether my previous reply reached this chat/i.test(normalized) &&
+    /won['’]t resend it automatically/i.test(normalized);
+  if (isRestartRecovery) return undefined;
+
+  const encoder = new TextEncoder();
+  if (encoder.encode(normalized).length <= meshCoreAgentTargetBytes) return normalized;
+  return nativeReplyTooLong;
+}
+
 export function acceptsDirectDeliveryState(
   state: string | undefined,
   requireAcknowledgement: boolean,
@@ -335,10 +355,12 @@ const outbound = {
     const account = resolveMeshCoreAccount(cfg, accountId);
     const target = normalizeMeshCoreTarget(to);
     if (!target) throw new Error("MeshCore target must be a 64-character public key");
+    const reply = nativeRadioReply(text);
+    if (!reply) return { messageId: "suppressed-local-recovery" };
     const result = await sendDirect(
       new MeshPincerClient(account.socketPath),
       target,
-      text,
+      reply,
     );
     return { messageId: result.messageId };
   },
@@ -468,8 +490,8 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
                 | { inbound?: { buildContext?: unknown } }
                 | undefined,
               deliver: async (payload) => {
-                const response = replyText(payload);
-                if (response.trim()) {
+                const response = nativeRadioReply(replyText(payload));
+                if (response) {
                   const result = await sendDirect(client, peerKey, response, false);
                   if (result.deliveryState === "timed_out") {
                     ctx.log?.warn?.(

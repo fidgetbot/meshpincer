@@ -141,8 +141,10 @@ The transmit path must implement the project policy in
   presented as acknowledgement, and retry exhaustion is reported honestly.
 - Native agent replies target at most 75 UTF-8 bytes and use fewer when useful;
   160 UTF-8 bytes is a hard firmware ceiling. Limits are measured after UTF-8
-  encoding, and delivery uncertainty never triggers explanatory RF traffic or
-  an automatic resend.
+  encoding. The native adapter enforces the 75-byte budget: oversized output is
+  replaced by one short error, and transport-recovery notices are kept off RF.
+  Delivery uncertainty never triggers explanatory RF traffic or an automatic
+  resend.
 - Cross-network forwarding always has an explicit destination and does not
   mirror private content or precise coordinates by default.
 - Transmission fails closed until frequency, power, duty cycle, regional scope,

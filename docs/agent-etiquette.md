@@ -17,7 +17,10 @@ than a LoRa network can carry it, so a good agent is intentionally quiet.
    actionable information instead of raw telemetry dumps.
 
    For ordinary agent replies, aim for at most **75 UTF-8 bytes** and use fewer
-   whenever the answer remains useful. MeshCore's current text ceiling is 160
+   whenever the answer remains useful. Native agent output must enforce that
+   budget in code, including errors and recovery paths; oversized output should
+   become one terse error, while local delivery diagnostics should not be sent
+   over RF at all. MeshCore's current text ceiling is 160
    UTF-8 bytes; that is a protocol limit, not a writing target. The 75-byte DM
    target plus MeshCore's five bytes of text metadata fits exactly five AES
    blocks. At 76 bytes, encryption needs a sixth block. Group messages must

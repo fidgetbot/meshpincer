@@ -108,6 +108,9 @@ Native replies aim for at most 75 UTF-8 bytes and use fewer whenever possible.
 The firmware's 160-byte text maximum is enforced as a hard encoded-byte limit,
 not treated as a normal response length. Uncertain acknowledgements are logged
 locally and never generate automatic explanatory radio traffic or retries.
+The native channel also enforces the 75-byte budget in code: oversized agent
+output becomes one short error, while OpenClaw restart-recovery notices are
+suppressed from RF entirely.
 
 ## Project status
 

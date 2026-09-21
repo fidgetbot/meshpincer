@@ -5,6 +5,7 @@ import {
   meshCoreAgentTargetBytes,
   meshCoreHardTextBytes,
   MeshCoreEventPump,
+  nativeRadioReply,
   normalizeMeshCoreTarget,
   singleRadioReply,
   type MeshCoreEvent,
@@ -49,6 +50,21 @@ describe("MeshCore native channel", () => {
     expect(new TextEncoder().encode(reply).length).toBeLessThanOrEqual(160);
     expect(reply.endsWith("…")).toBe(true);
     expect(reply).not.toContain("�");
+  });
+
+  it("enforces the 75-byte native reply budget in code", () => {
+    expect(nativeRadioReply("MeshPincer OK")).toBe("MeshPincer OK");
+    expect(nativeRadioReply("x".repeat(76))).toBe("Reply too long. Ask again briefly.");
+    expect(new TextEncoder().encode(nativeRadioReply("🙂".repeat(19)) ?? "").length)
+      .toBeLessThanOrEqual(meshCoreAgentTargetBytes);
+  });
+
+  it("suppresses OpenClaw restart-recovery commentary on RF", () => {
+    expect(
+      nativeRadioReply(
+        "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.",
+      ),
+    ).toBeUndefined();
   });
 
   it("keeps uncertain native replies local instead of triggering RF recovery text", () => {
