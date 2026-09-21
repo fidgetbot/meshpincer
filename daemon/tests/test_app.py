@@ -10,6 +10,7 @@ from meshpincer.models import (
     ContactRecord,
     InboundMessage,
     RadioStatus,
+    RepeaterStatus,
 )
 from meshpincer.radio import DirectSendOutcome
 from meshpincer.store import Store
@@ -52,6 +53,19 @@ class FakeRadioManager:
         assert channel_index == 3
         assert text == "Fidget: private send"
         await on_transmitted()
+
+    async def request_repeater_status(self, public_key: str) -> RepeaterStatus:
+        assert public_key == "ab" * 32
+        return RepeaterStatus(
+            public_key=public_key,
+            name="Test repeater",
+            path_length=1,
+            battery_mv=4100,
+            packets_received=100,
+            packets_sent=50,
+            uptime_seconds=3600,
+            requested_at="2026-09-21T08:00:00Z",
+        )
 
 
 @pytest.fixture
@@ -229,4 +243,61 @@ async def test_channel_send_records_transmit_without_ack(settings: Settings) -> 
     assert [event["kind"] for event in events.json()] == [
         "message.queued",
         "message.transmitted",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_status_records_one_request_and_success(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/v1/repeaters/{'ab' * 32}/status")
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Test repeater"
+    assert response.json()["battery_mv"] == 4100
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.status.requested",
+        "repeater.status.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_status_rejects_invalid_public_key_before_radio(
+    settings: Settings,
+) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/v1/repeaters/not-a-key/status")
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_repeater_status_records_timeout_without_retry(settings: Settings) -> None:
+    radio = FakeRadioManager()
+    calls = 0
+
+    async def timed_out(_public_key: str) -> RepeaterStatus:
+        nonlocal calls
+        calls += 1
+        raise TimeoutError("repeater did not return status before the timeout")
+
+    radio.request_repeater_status = timed_out  # type: ignore[method-assign]
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/v1/repeaters/{'ab' * 32}/status")
+            events = await client.get("/v1/events")
+
+    assert calls == 1
+    assert response.status_code == 504
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.status.requested",
+        "repeater.status.timed_out",
     ]

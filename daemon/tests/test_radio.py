@@ -20,9 +20,11 @@ class FakeBackend:
         self.disconnected = False
         self.receiver = None
         self.contact_path_length = 2
+        self.contact_node_type = 1
         self.sent: list[tuple[str, str]] = []
         self.channel_one_configured = False
         self.channel_sent: list[tuple[int, str]] = []
+        self.repeater_status_requests: list[tuple[str, float]] = []
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -64,7 +66,7 @@ class FakeBackend:
             {
                 "public_key": "34" * 32,
                 "adv_name": "Peer",
-                "type": 1,
+                "type": self.contact_node_type,
                 "flags": 0,
                 "out_path_len": self.contact_path_length,
                 "last_advert": 100,
@@ -111,6 +113,29 @@ class FakeBackend:
     async def send_channel(self, channel_index: int, text: str, on_transmitted):
         self.channel_sent.append((channel_index, text))
         await on_transmitted()
+
+    async def request_repeater_status(self, public_key: str, timeout: float):
+        self.repeater_status_requests.append((public_key, timeout))
+        return {
+            "bat": 4095,
+            "tx_queue_len": 1,
+            "noise_floor": -118,
+            "last_rssi": -79,
+            "nb_recv": 100,
+            "nb_sent": 50,
+            "airtime": 12,
+            "uptime": 3600,
+            "sent_flood": 2,
+            "sent_direct": 48,
+            "recv_flood": 3,
+            "recv_direct": 97,
+            "full_evts": 0,
+            "last_snr": 5.25,
+            "direct_dups": 1,
+            "flood_dups": 2,
+            "rx_airtime": 20,
+            "recv_errors": 0,
+        }
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -529,6 +554,71 @@ async def test_manager_rate_limits_repeated_private_channel_send(tmp_path: Path)
     assert backend.channel_sent == [(1, "first")]
 
 
+async def test_manager_requests_one_known_repeater_status_and_rate_limits(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_status_timeout_seconds=7,
+        repeater_status_global_cooldown_seconds=30,
+        repeater_status_peer_cooldown_seconds=900,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        status = await manager.request_repeater_status("34" * 32)
+        with pytest.raises(SendPolicyError, match="cooldown"):
+            await manager.request_repeater_status("34" * 32)
+    finally:
+        await manager.stop()
+
+    assert backend.repeater_status_requests == [("34" * 32, 7)]
+    assert status.name == "Peer"
+    assert status.battery_mv == 4095
+    assert status.last_snr_db == 5.25
+    assert status.receive_errors == 0
+
+
+async def test_manager_rejects_non_repeater_status_target_without_transmit(
+    tmp_path: Path,
+) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(ValueError, match="not a repeater"):
+            await manager.request_repeater_status("34" * 32)
+    finally:
+        await manager.stop()
+
+    assert backend.repeater_status_requests == []
+
+
 async def test_meshcore_backend_correlates_early_ack() -> None:
     expected_ack = bytes.fromhex("01020304")
 
@@ -606,3 +696,24 @@ async def test_meshcore_backend_submits_channel_message_without_fake_ack() -> No
     await backend.send_channel(3, "Fidget: private test", on_transmitted)
 
     assert transmitted
+
+
+async def test_meshcore_backend_requests_repeater_status_once() -> None:
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+
+        async def req_status_sync(self, public_key: str, timeout: float):
+            self.calls.append((public_key, timeout))
+            return {"bat": 4200, "recv_errors": 0}
+
+    commands = FakeCommands()
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=commands),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+
+    result = await backend.request_repeater_status("ab" * 32, timeout=11)
+
+    assert commands.calls == [("ab" * 32, 11)]
+    assert result == {"bat": 4200, "recv_errors": 0}

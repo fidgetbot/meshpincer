@@ -130,5 +130,20 @@ transmission. No recovery notice, oversized fallback, duplicate, or automatic
 retry followed. This closes the concise native direct-message reply and
 restart-recovery suppression cases.
 
+### Private group-channel acceptance
+
+A randomly keyed temporary channel in slot 1 was imported out of band into the
+two companions and explicitly allowlisted at both the daemon and OpenClaw
+boundaries. Ambient group traffic remained passive. A message using the
+MeshCore app's bracketed runtime-name mention created one stable per-slot group
+conversation and exactly one short channel reply. The reply was durably
+recorded as transmitted; no end-to-end acknowledgement was claimed because
+MeshCore channel broadcasts do not provide one.
+
+After the proof, the temporary channel was removed from the Wio, slot 1 was
+read back as empty, and both local transmit allowlists were cleared. No RF
+packet was sent by the USB configuration cleanup. Public remained receive-only
+throughout.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

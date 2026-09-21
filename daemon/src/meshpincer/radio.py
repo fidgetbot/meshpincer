@@ -20,6 +20,7 @@ from .models import (
     RadioProfile,
     RadioStatus,
     RadioTelemetry,
+    RepeaterStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,12 @@ class RadioBackend(Protocol):
         text: str,
         on_transmitted: ChannelTransmittedHandler,
     ) -> None: ...
+
+    async def request_repeater_status(
+        self,
+        public_key: str,
+        timeout: float,
+    ) -> Mapping[str, Any] | None: ...
 
     async def disconnect(self) -> None: ...
 
@@ -256,6 +263,13 @@ class MeshCoreBackend:
         _event_payload(event, "channel message send")
         await on_transmitted()
 
+    async def request_repeater_status(
+        self,
+        public_key: str,
+        timeout: float,
+    ) -> Mapping[str, Any] | None:
+        return await self.client.commands.req_status_sync(public_key, timeout=timeout)
+
     async def stop_receiving(self) -> None:
         if self._receiving:
             await self.client.stop_auto_message_fetching()
@@ -320,6 +334,8 @@ class RadioManager:
         self._last_direct_send_by_peer: dict[str, float] = {}
         self._last_channel_send = float("-inf")
         self._last_channel_send_by_index: dict[int, float] = {}
+        self._last_repeater_status = float("-inf")
+        self._last_repeater_status_by_peer: dict[str, float] = {}
 
     async def start(self) -> None:
         if self._task is None:
@@ -439,6 +455,72 @@ class RadioManager:
                 await on_transmitted()
 
             await backend.send_channel(channel_index, text, mark_transmitted)
+
+    async def request_repeater_status(self, public_key: str) -> RepeaterStatus:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            async with self._lock:
+                backend = self._backend
+                connected = self._status.connected
+                contact = next(
+                    (item for item in self._contacts if item.public_key.lower() == normalized_key),
+                    None,
+                )
+            if not connected or backend is None:
+                raise ConnectionError("MeshCore radio is not connected")
+            if contact is None:
+                raise ValueError("repeater is not a known contact")
+            if contact.node_type != 2:
+                raise ValueError("contact is not a repeater")
+
+            now = asyncio.get_running_loop().time()
+            global_remaining = (
+                self._last_repeater_status
+                + self.settings.repeater_status_global_cooldown_seconds
+                - now
+            )
+            peer_remaining = (
+                self._last_repeater_status_by_peer.get(normalized_key, float("-inf"))
+                + self.settings.repeater_status_peer_cooldown_seconds
+                - now
+            )
+            remaining = max(global_remaining, peer_remaining)
+            if remaining > 0:
+                raise SendPolicyError(f"repeater-status cooldown active for {remaining:.1f}s")
+
+            self._last_repeater_status = now
+            self._last_repeater_status_by_peer[normalized_key] = now
+            payload = await backend.request_repeater_status(
+                normalized_key,
+                self.settings.repeater_status_timeout_seconds,
+            )
+            if payload is None:
+                raise TimeoutError("repeater did not return status before the timeout")
+
+            return RepeaterStatus(
+                public_key=normalized_key,
+                name=contact.name,
+                path_length=contact.path_length,
+                battery_mv=payload.get("bat"),
+                tx_queue_length=payload.get("tx_queue_len"),
+                noise_floor_dbm=payload.get("noise_floor"),
+                last_rssi_dbm=payload.get("last_rssi"),
+                packets_received=payload.get("nb_recv"),
+                packets_sent=payload.get("nb_sent"),
+                airtime=payload.get("airtime"),
+                uptime_seconds=payload.get("uptime"),
+                sent_flood=payload.get("sent_flood"),
+                sent_direct=payload.get("sent_direct"),
+                received_flood=payload.get("recv_flood"),
+                received_direct=payload.get("recv_direct"),
+                full_events=payload.get("full_evts"),
+                last_snr_db=payload.get("last_snr"),
+                direct_duplicates=payload.get("direct_dups"),
+                flood_duplicates=payload.get("flood_dups"),
+                receive_airtime=payload.get("rx_airtime"),
+                receive_errors=payload.get("recv_errors"),
+                requested_at=datetime.now(UTC),
+            )
 
     async def _run(self) -> None:
         delay = self.settings.reconnect_initial_seconds

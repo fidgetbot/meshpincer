@@ -119,6 +119,13 @@ read-only. Private-channel replies count their sender label inside the 75-byte
 budget, use strict global/per-channel cooldowns, and are recorded as
 `transmitted` rather than falsely claiming an ACK.
 
+Read-only repeater status is implemented as one bounded request to an exact,
+known repeater public key. The daemon validates the contact type, records the
+outcome durably, and enforces global and per-repeater cooldowns. It never polls
+automatically or retries a timed-out request. Authenticated repeater
+configuration remains disabled until its read/change/read-back path is
+implemented and hardware-proven.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

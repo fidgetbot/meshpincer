@@ -203,8 +203,12 @@ daemon and attached Wio. The direct-send daemon path is hardware-proven with ACK
 correlation. An explicitly authorized Telegram request has also exercised
 `meshcore_send` through the live OpenClaw tool boundary: one zero-hop DM was
 queued, transmitted, and acknowledged without retry or flood fallback. Repeater
-operations remain unexposed by policy until their daemon implementation and
-read/change/read-back proof are complete.
+status is implemented with exact public-key and repeater-type validation, one
+request per invocation, a bounded timeout, durable outcome events, and global
+plus per-repeater cooldowns. It remains hidden from the live agent tool profile
+until a controlled repeater is identified and the first hardware query is
+explicitly authorized. Authenticated configuration remains unimplemented
+pending its read/change/read-back proof.
 
 ### M3 — native channel
 
@@ -231,7 +235,10 @@ agent turns and transmission. Private traffic requires an explicit runtime-name
 mention, uses stable per-slot group sessions, treats sender labels as untrusted,
 cannot authorize commands, includes the sender label inside the 75-byte reply
 budget, and applies strict flood cooldowns. Hardware acceptance on an ephemeral
-private channel remains before this part of M3 is complete.
+private channel is complete: a bracketed native mention created one stable group
+turn and one short transmitted reply. The temporary slot and both transmit
+allowlists were then removed; private-channel support remains available for
+explicit deployments.
 
 ## Verification requirements
 

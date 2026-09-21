@@ -38,6 +38,9 @@ class Settings:
     channel_send_allowlist: frozenset[int] = frozenset()
     channel_global_cooldown_seconds: float = 30.0
     channel_per_channel_cooldown_seconds: float = 300.0
+    repeater_status_timeout_seconds: float = 15.0
+    repeater_status_global_cooldown_seconds: float = 30.0
+    repeater_status_peer_cooldown_seconds: float = 900.0
 
     @property
     def database_path(self) -> Path:
@@ -70,5 +73,14 @@ class Settings:
             ),
             channel_per_channel_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_CHANNEL_PER_CHANNEL_COOLDOWN", "300")
+            ),
+            repeater_status_timeout_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_STATUS_TIMEOUT", "15")
+            ),
+            repeater_status_global_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_STATUS_GLOBAL_COOLDOWN", "30")
+            ),
+            repeater_status_peer_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_STATUS_PEER_COOLDOWN", "900")
             ),
         )

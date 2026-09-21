@@ -15,6 +15,7 @@ from .models import (
     EventRecord,
     MessageRecord,
     RepeaterConfigRequest,
+    RepeaterStatus,
     SendMessageRequest,
     SendMessageResult,
     ServiceStatus,
@@ -210,12 +211,47 @@ def create_app(
             ack_code=None,
         )
 
-    @app.get("/v1/repeaters/{public_key}/status")
-    async def repeater_status(public_key: str) -> dict[str, str]:
-        raise HTTPException(
-            status_code=501,
-            detail=f"repeater status is not implemented for {public_key}",
+    @app.get("/v1/repeaters/{public_key}/status", response_model=RepeaterStatus)
+    async def repeater_status(
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterStatus:
+        normalized_key = public_key.lower()
+        await store.append_event(
+            "repeater.status.requested",
+            {"public_key": normalized_key},
         )
+        try:
+            result = await radio.request_repeater_status(normalized_key)
+        except SendPolicyError as exc:
+            await store.append_event(
+                "repeater.status.rate_limited",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event(
+                "repeater.status.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event(
+                "repeater.status.timed_out",
+                {"public_key": normalized_key},
+            )
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "repeater.status.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        await store.append_event(
+            "repeater.status.succeeded",
+            result.model_dump(mode="json"),
+        )
+        return result
 
     @app.patch("/v1/repeaters/{public_key}/config")
     async def configure_repeater(

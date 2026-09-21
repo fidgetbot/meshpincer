@@ -78,6 +78,31 @@ class ChannelRecord(BaseModel):
     channel_hash: str | None = None
 
 
+class RepeaterStatus(BaseModel):
+    public_key: str
+    name: str
+    path_length: int | None = None
+    battery_mv: int | None = None
+    tx_queue_length: int | None = None
+    noise_floor_dbm: int | None = None
+    last_rssi_dbm: int | None = None
+    packets_received: int | None = None
+    packets_sent: int | None = None
+    airtime: int | None = None
+    uptime_seconds: int | None = None
+    sent_flood: int | None = None
+    sent_direct: int | None = None
+    received_flood: int | None = None
+    received_direct: int | None = None
+    full_events: int | None = None
+    last_snr_db: float | None = None
+    direct_duplicates: int | None = None
+    flood_duplicates: int | None = None
+    receive_airtime: int | None = None
+    receive_errors: int | None = None
+    requested_at: datetime
+
+
 class ServiceStatus(BaseModel):
     service: str = "meshpincer"
     version: str

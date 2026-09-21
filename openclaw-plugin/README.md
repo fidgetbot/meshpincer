@@ -17,14 +17,16 @@ the implemented operator tools to `tools.alsoAllow`:
       "meshcore_contacts",
       "meshcore_channels",
       "meshcore_send",
+      "meshcore_repeater_status",
     ],
   },
 }
 ```
 
-Do not allow the repeater tools until their daemon endpoints and verification
-workflow are configured. Plugin activation alone does not bypass OpenClaw's
-normal tool policy.
+Allow `meshcore_repeater_status` only after the daemon's bounded read-only
+status endpoint is deployed. Keep `meshcore_repeater_configure` hidden until
+its authenticated read/change/read-back workflow is implemented and verified.
+Plugin activation alone does not bypass OpenClaw's normal tool policy.
 
 The typed client supports durable event replay and cursor advancement over the
 same socket. Each OpenClaw surface uses its own consumer ID, processes events in

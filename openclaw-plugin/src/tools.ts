@@ -159,8 +159,11 @@ export const toolEntry = defineToolPlugin({
     }),
     tool({
       name: "meshcore_repeater_status",
-      description: "Request status from a known MeshCore repeater.",
-      parameters: Type.Object({ publicKey: Type.String({ minLength: 2 }) }),
+      description:
+        "Send one rate-limited status request to a known MeshCore repeater.",
+      parameters: Type.Object({
+        publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+      }),
       execute: async ({ publicKey }, config) => {
         const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
         return {
