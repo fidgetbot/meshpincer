@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { dispatchInboundDirectDm } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { defaultSocketPath, type JsonValue, MeshPincerClient } from "./client.js";
 
 const publicKeyPattern = /^[0-9a-f]{64}$/i;
@@ -103,6 +104,7 @@ export type MeshCoreEvent = {
 };
 
 type CursorRecord = { consumer_id: string; event_id: number };
+type MeshCoreChannelRuntime = PluginRuntime["channel"];
 type ServiceStatus = {
   last_event_id?: number;
   radio?: { public_key?: string | null; node_name?: string | null };
@@ -548,7 +550,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
     message: messageAdapter,
     gateway: {
       startAccount: async (ctx) => {
-        const runtime = ctx.channelRuntime as PluginRuntime | undefined;
+        const runtime = ctx.channelRuntime as MeshCoreChannelRuntime | undefined;
         if (!runtime) throw new Error("MeshCore channel runtime is unavailable");
         const client = new MeshPincerClient(ctx.account.socketPath);
         const allow = new Set(ctx.account.allowDirectFrom);
@@ -584,13 +586,13 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
               if (!body) return;
 
               const target = `meshcore:channel:${channelIndex}`;
-              const route = runtime.channel.routing.resolveAgentRoute({
+              const route = resolveAgentRoute({
                 cfg: ctx.cfg,
                 channel: "meshcore",
                 accountId: ctx.account.accountId,
                 peer: { kind: "group", id: `channel-${channelIndex}` },
               });
-              const ctxPayload = runtime.channel.inbound.buildContext({
+              const ctxPayload = runtime.inbound.buildContext({
                 channel: "meshcore",
                 accountId: ctx.account.accountId,
                 provider: "meshcore",
@@ -643,7 +645,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
                 },
                 channelIngress: "unsupported",
               });
-              await runtime.channel.inbound.dispatch({
+              await runtime.inbound.dispatch({
                 cfg: ctx.cfg,
                 channel: "meshcore",
                 accountId: ctx.account.accountId,
