@@ -96,6 +96,11 @@ Secrets are references or device-held values, not message-database columns.
 - Receive and persist direct/channel messages
 - Send test messages and correlate acknowledgements
 
+Status as of 2026-09-20: USB discovery and read-only device, radio, contact,
+channel, and statistics queries have been proven on a Wio Tracker L1 Pro.
+Receive/persistence and RF send/acknowledgement acceptance remain open. See
+[`docs/hardware-validation.md`](docs/hardware-validation.md).
+
 ### M2 — operator tools
 
 - Exercise status, inbox, and send operations from Telegram through OpenClaw
