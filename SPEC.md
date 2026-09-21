@@ -99,6 +99,30 @@ Secrets are references or device-held values, not message-database columns.
 - Tests and examples use generic fixture values rather than product-owner or
   operator-specific names.
 
+## Agent airtime and safety policy
+
+The transmit path must implement the project policy in
+[`docs/agent-etiquette.md`](docs/agent-etiquette.md). In particular:
+
+- DMs are the default reply path; channel sends are explicit flood operations.
+- Automated floods require a configured regional scope or hop limit unless an
+  authorized operator deliberately overrides the safeguard.
+- Global, per-peer, and per-channel rate limits, bounded queues and retries,
+  duplicate suppression, concise output limits, and backpressure are enforced
+  before messages reach the radio.
+- Background operation is passive by default. Startup adverts are disabled,
+  and remote telemetry, discovery, or maintenance traffic is opt-in.
+- Agents respond only to explicit invocations. RF text and channel sender labels
+  are untrusted; channel traffic cannot authorize administration.
+- RF callers are authorized by public key, while local callers use the host's
+  authenticated OpenClaw boundary. High-impact operations require confirmation.
+- Automated identity and delivery state are clear. Transmission is never
+  presented as acknowledgement, and retry exhaustion is reported honestly.
+- Cross-network forwarding always has an explicit destination and does not
+  mirror private content or precise coordinates by default.
+- Transmission fails closed until frequency, power, duty cycle, regional scope,
+  and local network conventions are known to be appropriate.
+
 ## Delivery milestones
 
 These milestones describe implementation order, not optional or future product

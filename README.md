@@ -29,10 +29,26 @@ The project is intentionally reusable: device names, agent names, network
 profiles, contacts, and channels are discovered or configured at runtime rather
 than compiled into MeshPincer.
 
+## Be a quiet mesh neighbor
+
+Agents can generate traffic much faster than LoRa can carry it. MeshPincer
+therefore treats airtime as a shared, scarce resource:
+
+- prefer DMs and learned direct routes over channel floods;
+- scope automated channel traffic to the smallest useful region or hop budget;
+- rate-limit, deduplicate, batch, and keep replies short;
+- observe passively and avoid routine probes or startup adverts;
+- accept commands only from explicit, authorized interactions; and
+- identify automation and report delivery state honestly.
+
+The complete [agent etiquette](docs/agent-etiquette.md) is a product requirement
+for the transmit path, not optional deployment advice.
+
 ## Repository layout
 
 - `daemon/` — Python 3.12 asyncio service built on `meshcore_py`
 - `openclaw-plugin/` — TypeScript OpenClaw tool plugin
+- `docs/agent-etiquette.md` — airtime and safety policy for agents
 - `SPEC.md` — product scope, architecture, and delivery milestones
 
 ## Development
