@@ -89,6 +89,14 @@ path also fails closed for unknown contacts and non-zero-hop routes, limits
 message length, serializes radio operations, and enforces global and per-peer
 cooldowns before transmission.
 
+The same send path was subsequently exercised through the installed OpenClaw
+operator tool from a Telegram conversation. One explicit request sent
+`MeshPincer operator OK` to the known zero-hop companion. MeshPincer created one
+outbound record and durably recorded queued, transmitted, and acknowledged
+events with a matching ACK code in 0.83 seconds. It created no retry, flood,
+channel message, or advert. The pager operator confirmed receipt of the single
+message copy.
+
 ### Native OpenClaw channel acceptance
 
 The installed `meshcore` channel was baselined at the current durable event

@@ -200,10 +200,11 @@ Status as of 2026-09-20: the plugin is installed in an OpenClaw Gateway and the
 live `meshcore_status` and cursor-backed `meshcore_messages` tools have been
 called successfully through the real agent tool boundary against the supervised
 daemon and attached Wio. The direct-send daemon path is hardware-proven with ACK
-correlation, and `meshcore_send` is registered and policy-allowed; a separate
-operator-tool transmission is intentionally deferred until an exact outbound
-message is authorized. Repeater operations remain unexposed by policy until
-their daemon implementation and read/change/read-back proof are complete.
+correlation. An explicitly authorized Telegram request has also exercised
+`meshcore_send` through the live OpenClaw tool boundary: one zero-hop DM was
+queued, transmitted, and acknowledged without retry or flood fallback. Repeater
+operations remain unexposed by policy until their daemon implementation and
+read/change/read-back proof are complete.
 
 ### M3 — native channel
 
