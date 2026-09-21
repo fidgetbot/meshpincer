@@ -1,14 +1,67 @@
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-import { defaultSocketPath, MeshPincerClient } from "./client.js";
+import {
+  defaultSocketPath,
+  type JsonValue,
+  MeshPincerClient,
+} from "./client.js";
 
 const configSchema = Type.Object({
   socketPath: Type.Optional(
     Type.String({ description: "Path to the meshpincerd Unix-domain socket." }),
   ),
+  consumerId: Type.Optional(
+    Type.String({
+      description: "Durable event-cursor identity used by the operator inbox.",
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+    }),
+  ),
 });
 
 const scalar = Type.Union([Type.String(), Type.Number(), Type.Boolean()]);
+
+type MessageQuery = {
+  mode: "unread" | "history";
+  afterId: number;
+  limit: number;
+  acknowledgeThroughEventId?: number;
+};
+
+export async function queryMessages(
+  client: MeshPincerClient,
+  consumerId: string,
+  query: MessageQuery,
+): Promise<JsonValue> {
+  if (query.mode === "history") {
+    const parameters = new URLSearchParams({
+      after_id: String(query.afterId),
+      limit: String(query.limit),
+    });
+    return {
+      mode: "history",
+      messages: await client.get(`/v1/messages?${parameters}`),
+    };
+  }
+
+  const encodedConsumerId = encodeURIComponent(consumerId);
+  if (query.acknowledgeThroughEventId !== undefined) {
+    await client.put(`/v1/consumers/${encodedConsumerId}/cursor`, {
+      event_id: query.acknowledgeThroughEventId,
+    });
+  }
+  const parameters = new URLSearchParams({ limit: String(query.limit) });
+  const [cursor, events] = await Promise.all([
+    client.get(`/v1/consumers/${encodedConsumerId}/cursor`),
+    client.get(`/v1/consumers/${encodedConsumerId}/events?${parameters}`),
+  ]);
+  return {
+    mode: "unread",
+    consumer_id: consumerId,
+    cursor,
+    events,
+    acknowledgement_required: true,
+  };
+}
 
 export default defineToolPlugin({
   id: "meshpincer",
@@ -27,18 +80,34 @@ export default defineToolPlugin({
     }),
     tool({
       name: "meshcore_messages",
-      description: "List MeshCore messages recorded after an optional message ID.",
+      description:
+        "Read the durable MeshCore inbox or message history. Unread mode never advances its cursor automatically; after processing a result, acknowledge through its last event ID on the next call.",
       parameters: Type.Object({
+        mode: Type.Optional(
+          Type.Union([Type.Literal("unread"), Type.Literal("history")]),
+        ),
         afterId: Type.Optional(Type.Integer({ minimum: 0 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+        acknowledgeThroughEventId: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
-      execute: async ({ afterId = 0, limit = 100 }, config) => {
+      execute: async (
+        {
+          mode = "unread",
+          afterId = 0,
+          limit = 100,
+          acknowledgeThroughEventId,
+        },
+        config,
+      ) => {
         const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
-        const query = new URLSearchParams({
-          after_id: String(afterId),
-          limit: String(limit),
-        });
-        return { response: await client.get(`/v1/messages?${query}`) };
+        return {
+          response: await queryMessages(client, config.consumerId ?? "operator-tools", {
+            mode,
+            afterId,
+            limit,
+            acknowledgeThroughEventId,
+          }),
+        };
       },
     }),
     tool({

@@ -91,6 +91,12 @@ also transmitted and acknowledged without retry or flood fallback. The daemon
 durably records each delivery-state transition and enforces direct-message
 length and cooldown limits before transmission.
 
+The operator plugin is also live-proven through an OpenClaw Gateway: an agent
+has called the real `meshcore_status` and cursor-backed `meshcore_messages`
+tools against a supervised `meshpincerd` instance and attached Wio. Restrictive
+OpenClaw tool profiles must explicitly allow the implemented MeshPincer tools;
+see the [plugin README](openclaw-plugin/README.md).
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

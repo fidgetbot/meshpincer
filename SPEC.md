@@ -185,6 +185,20 @@ fallback. See
 - Add repeater status, telemetry, authenticated login, and validated settings
 - Return explicit delivery and verification outcomes
 
+The operator inbox uses its own durable consumer cursor. Reading a batch does
+not advance the cursor implicitly; the OpenClaw agent acknowledges the last
+successfully processed event on its next call, preserving at-least-once replay
+if a turn fails between tool execution and response handling.
+
+Status as of 2026-09-20: the plugin is installed in an OpenClaw Gateway and the
+live `meshcore_status` and cursor-backed `meshcore_messages` tools have been
+called successfully through the real agent tool boundary against the supervised
+daemon and attached Wio. The direct-send daemon path is hardware-proven with ACK
+correlation, and `meshcore_send` is registered and policy-allowed; a separate
+operator-tool transmission is intentionally deferred until an exact outbound
+message is authorized. Repeater operations remain unexposed by policy until
+their daemon implementation and read/change/read-back proof are complete.
+
 ### M3 — native channel
 
 - Map MeshCore direct peers to OpenClaw DMs
