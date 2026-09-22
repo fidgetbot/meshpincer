@@ -145,5 +145,20 @@ read back as empty, and both local transmit allowlists were cleared. No RF
 packet was sent by the USB configuration cleanup. Public remained receive-only
 throughout.
 
+### Restart-free device-management acceptance
+
+The supervised daemon was upgraded once to load its contact and private-channel
+management API. After it reconnected, an existing companion contact was
+idempotently updated and private slot 1 was renamed to its existing label
+through the daemon's Unix socket. Both operations used the same long-lived
+daemon PID, shared its serialized radio-operation lock, and returned verified
+read-back state without disconnecting the USB session.
+
+The contact retained its flood/unknown route, while the private channel retained
+its channel hash. A fresh periodic hardware-statistics snapshot still reported
+14 transmitted packets—the same count as before both changes—confirming that
+neither operation emitted RF traffic. Audit events recorded the operation and
+sanitized outcome without storing the private channel secret.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.
