@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   acceptsDirectDeliveryState,
+  constrainedRadioReply,
+  exactReplyRequest,
   meshCoreAgentGuidance,
+  meshCoreAgentSystemPrompt,
   meshCoreAgentTargetBytes,
   meshCoreHardTextBytes,
   MeshCoreEventPump,
+  meshCorePromptPolicy,
   nativeRadioReply,
   normalizeMeshCoreTarget,
   privateChannelInvocation,
@@ -45,6 +49,19 @@ describe("MeshCore native channel", () => {
     expect(meshCoreAgentGuidance).toContain("fewest words");
     expect(meshCoreAgentGuidance).toContain("75 UTF-8 bytes");
     expect(meshCoreAgentGuidance).toContain("automatic-resend");
+    expect(meshCoreAgentSystemPrompt).toContain("Output only the user-visible RF reply");
+  });
+
+  it("injects system guidance and an empty tool surface only for MeshCore turns", () => {
+    expect(meshCorePromptPolicy({ channel: "meshcore" })).toEqual({
+      appendSystemContext: meshCoreAgentSystemPrompt,
+      toolsAllow: [],
+    });
+    expect(meshCorePromptPolicy({ messageProvider: "meshcore" })).toEqual({
+      appendSystemContext: meshCoreAgentSystemPrompt,
+      toolsAllow: [],
+    });
+    expect(meshCorePromptPolicy({ channel: "telegram" })).toBeUndefined();
   });
 
   it("enforces the hard limit in UTF-8 bytes without splitting code points", () => {
@@ -56,9 +73,29 @@ describe("MeshCore native channel", () => {
 
   it("enforces the 75-byte native reply budget in code", () => {
     expect(nativeRadioReply("MeshPincer OK")).toBe("MeshPincer OK");
-    expect(nativeRadioReply("x".repeat(76))).toBe("Reply too long. Ask again briefly.");
-    expect(new TextEncoder().encode(nativeRadioReply("🙂".repeat(19)) ?? "").length)
-      .toBeLessThanOrEqual(meshCoreAgentTargetBytes);
+    expect(nativeRadioReply("x".repeat(76))).toBeUndefined();
+    expect(nativeRadioReply("🙂".repeat(19))).toBeUndefined();
+  });
+
+  it("runs one local compression repair and validates its UTF-8 bytes", async () => {
+    const repair = vi.fn(async () => "Short answer.");
+    await expect(
+      constrainedRadioReply("x".repeat(76), { repair }),
+    ).resolves.toBe("Short answer.");
+    expect(repair).toHaveBeenCalledOnce();
+    expect(repair).toHaveBeenCalledWith("x".repeat(76), meshCoreAgentTargetBytes);
+
+    await expect(
+      constrainedRadioReply("x".repeat(76), {
+        repair: async () => "🙂".repeat(19),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("bypasses generation for exact-reply requests", () => {
+    expect(exactReplyRequest("Reply exactly: MeshPincer OK")).toBe("MeshPincer OK");
+    expect(exactReplyRequest(" reply exactly:   OK  ")).toBe("OK");
+    expect(exactReplyRequest("reply ok")).toBeUndefined();
   });
 
   it("suppresses OpenClaw restart-recovery commentary on RF", () => {
@@ -67,6 +104,17 @@ describe("MeshCore native channel", () => {
         "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically. Please ask for any missing remainder.",
       ),
     ).toBeUndefined();
+  });
+
+  it("does not repair a suppressed restart-recovery notice", async () => {
+    const repair = vi.fn(async () => "Recovered");
+    await expect(
+      constrainedRadioReply(
+        "I couldn’t confirm whether my previous reply reached this chat, so I won’t resend it automatically.",
+        { repair },
+      ),
+    ).resolves.toBeUndefined();
+    expect(repair).not.toHaveBeenCalled();
   });
 
   it("keeps uncertain native replies local instead of triggering RF recovery text", () => {
@@ -97,15 +145,25 @@ describe("MeshCore native channel", () => {
     );
   });
 
-  it("counts the channel sender label inside the 75-byte RF budget", () => {
-    expect(privateChannelRadioReply("Fidget", "Private OK")).toBe(
+  it("counts the channel sender label inside the 75-byte RF budget", async () => {
+    await expect(privateChannelRadioReply("Fidget", "Private OK")).resolves.toBe(
       "Fidget: Private OK",
     );
-    const oversized = privateChannelRadioReply("Fidget", "x".repeat(75));
-    expect(oversized).toBe("Fidget: Reply too long.");
+    const oversized = await privateChannelRadioReply(
+      "Fidget",
+      "x".repeat(75),
+      async () => "Brief.",
+    );
+    expect(oversized).toBe("Fidget: Brief.");
     expect(new TextEncoder().encode(oversized ?? "").length).toBeLessThanOrEqual(
       meshCoreAgentTargetBytes,
     );
+  });
+
+  it("suppresses a private-channel reply when its single repair still exceeds budget", async () => {
+    await expect(
+      privateChannelRadioReply("Fidget", "x".repeat(75), async () => "y".repeat(75)),
+    ).resolves.toBeUndefined();
   });
 
   it("baselines a new consumer at the current event head", async () => {

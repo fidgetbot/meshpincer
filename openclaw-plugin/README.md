@@ -52,11 +52,38 @@ The channel uses a consumer cursor separate from the operator inbox and, by
 default, baselines a new installation at the latest recorded event so old radio
 traffic cannot trigger agent turns.
 
+MeshPincer's per-turn RF system contract uses OpenClaw's conversation prompt
+hook. Because MeshPincer is a non-bundled plugin, explicitly authorize that
+hook while leaving the policy scoped to `meshcore` turns:
+
+```json5
+{
+  plugins: {
+    entries: {
+      meshpincer: {
+        hooks: {
+          allowConversationAccess: true,
+        },
+      },
+    },
+  },
+}
+```
+
+Do not set `allowPromptInjection` to `false`; that would block the RF system
+contract. Tool removal is also enforced directly on native MeshCore dispatches,
+independent of the hook.
+
 Replies use the fewest words that answer the request and target at most 75
 UTF-8 bytes. The current MeshCore firmware ceiling is 160 UTF-8 bytes, which
 MeshPincer enforces without splitting multi-byte characters. That ceiling is a
 compatibility boundary, not an invitation to fill every packet. The daemon's
 known-contact, learned-route, cooldown, and no-flood rules continue to apply.
+Before generation, native MeshCore turns receive a system-level RF reply
+contract and no optional tools. `reply exactly:` requests are handled
+deterministically. An oversized model draft gets at most one fresh, tool-free
+compression pass and is measured again; if it is still invalid, MeshPincer
+sends nothing rather than spending airtime on an error message.
 If a reply is transmitted but its ACK is uncertain, the native channel records
 that state locally and does not send a second explanatory message or auto-retry.
 Private-channel replies include the runtime node name (or the optional

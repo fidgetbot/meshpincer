@@ -92,8 +92,9 @@ have processed them, providing at-least-once delivery across restarts.
 
 The receive path has been proven over RF with a second physical MeshCore node:
 both channel traffic and an encrypted direct message survived a clean daemon
-restart with stable message and event IDs. A single zero-hop outbound DM was
-also transmitted and acknowledged without retry or flood fallback. The daemon
+restart with stable message and event IDs. Outbound DMs have been transmitted
+over both zero-hop and learned multi-hop direct routes without flood fallback.
+The daemon
 durably records each delivery-state transition and enforces direct-message
 length and cooldown limits before transmission.
 
@@ -112,11 +113,12 @@ subject to its route, length, and cooldown safeguards.
 
 Native replies aim for at most 75 UTF-8 bytes and use fewer whenever possible.
 The firmware's 160-byte text maximum is enforced as a hard encoded-byte limit,
-not treated as a normal response length. Uncertain acknowledgements are logged
-locally and never generate automatic explanatory radio traffic or retries.
-The native channel also enforces the 75-byte budget in code: oversized agent
-output becomes one short error, while OpenClaw restart-recovery notices are
-suppressed from RF entirely.
+not treated as a normal response length. MeshCore turns receive a system-level
+RF writing contract and no optional tools. Exact-reply requests are handled
+deterministically. An oversized draft gets at most one fresh, tool-free local
+compression pass and is measured again; if it is still invalid, MeshPincer
+sends nothing. Uncertain acknowledgements and OpenClaw restart-recovery notices
+remain local and never generate explanatory radio traffic or retries.
 
 Allowlisted private MeshCore slots map to native OpenClaw group conversations.
 They require an explicit `@<runtime node name>` invocation; sender labels remain

@@ -5,7 +5,6 @@ import {
   type OpenClawConfig,
   type PluginRuntime,
 } from "openclaw/plugin-sdk/core";
-import { dispatchInboundDirectDm } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { defaultSocketPath, type JsonValue, MeshPincerClient } from "./client.js";
@@ -17,13 +16,36 @@ const defaultPollIntervalMs = 1_000;
 export const meshCoreHardTextBytes = 160;
 export const meshCoreAgentTargetBytes = 75;
 
-export const meshCoreAgentGuidance = [
+export const meshCoreAgentSystemPrompt = [
+  "You are replying over MeshCore LoRa radio with scarce shared airtime.",
+  "Output only the user-visible RF reply.",
   "MeshCore is a low-bandwidth LoRa surface.",
   `Use the fewest words that fully answer and aim for at most ${meshCoreAgentTargetBytes} UTF-8 bytes; ${meshCoreHardTextBytes} bytes is a hard protocol ceiling, not a target.`,
   "Send one plain-text sentence with no Markdown, preamble, restatement, or sign-off.",
   "If the user requests exact text, send only that text.",
   "Never send delivery, retry, missing-ACK, or automatic-resend commentary over RF; delivery uncertainty is recorded locally.",
 ].join(" ");
+
+export const meshCoreAgentGuidance = meshCoreAgentSystemPrompt;
+
+let pluginRuntime: PluginRuntime | undefined;
+
+export function setMeshCorePluginRuntime(runtime: PluginRuntime): void {
+  pluginRuntime = runtime;
+}
+
+export function meshCorePromptPolicy(context: {
+  channel?: string;
+  messageProvider?: string;
+}): { appendSystemContext: string; toolsAllow: [] } | undefined {
+  if (context.channel !== "meshcore" && context.messageProvider !== "meshcore") {
+    return undefined;
+  }
+  return {
+    appendSystemContext: meshCoreAgentSystemPrompt,
+    toolsAllow: [],
+  };
+}
 
 const channelConfigJsonSchema = {
   type: "object",
@@ -301,8 +323,16 @@ function replyText(payload: unknown): string {
   return typeof payload.text === "string" ? payload.text : "";
 }
 
+function normalizedRadioText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 export function singleRadioReply(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = normalizedRadioText(text);
   const encoder = new TextEncoder();
   if (encoder.encode(normalized).length <= meshCoreHardTextBytes) return normalized;
 
@@ -319,24 +349,84 @@ export function singleRadioReply(text: string): string {
   return `${truncated}${ellipsis}`;
 }
 
-const nativeReplyTooLong = "Reply too long. Ask again briefly.";
+function isRestartRecoveryNotice(text: string): boolean {
+  return (
+    /couldn['’]t confirm whether my previous reply reached this chat/i.test(text) &&
+    /won['’]t resend it automatically/i.test(text)
+  );
+}
 
 export function nativeRadioReply(text: string): string | undefined {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = normalizedRadioText(text);
   if (!normalized) return undefined;
 
   // OpenClaw can mirror a pending delivery-recovery notice after a Gateway
   // restart. That notice is local transport state, not a reply for scarce RF
   // airtime. Treat it as successfully suppressed so it cannot consume the
   // direct-message cooldown or block the actual agent reply that follows.
-  const isRestartRecovery =
-    /couldn['’]t confirm whether my previous reply reached this chat/i.test(normalized) &&
-    /won['’]t resend it automatically/i.test(normalized);
-  if (isRestartRecovery) return undefined;
+  if (isRestartRecoveryNotice(normalized)) return undefined;
 
-  const encoder = new TextEncoder();
-  if (encoder.encode(normalized).length <= meshCoreAgentTargetBytes) return normalized;
-  return nativeReplyTooLong;
+  if (utf8Bytes(normalized) <= meshCoreAgentTargetBytes) return normalized;
+  return undefined;
+}
+
+export function exactReplyRequest(text: string): string | undefined {
+  const match = /^\s*reply\s+exactly\s*:\s*(.*?)\s*$/is.exec(text);
+  if (!match) return undefined;
+  const exact = normalizedRadioText(match[1] ?? "");
+  return exact || undefined;
+}
+
+export type RadioReplyRepair = (draft: string, budgetBytes: number) => Promise<string>;
+
+function runtimeRadioReplyRepair(agentId: string): RadioReplyRepair {
+  return async (draft: string, budgetBytes: number): Promise<string> => {
+    if (!pluginRuntime) return "";
+    const result = await pluginRuntime.subagent.complete({
+      agentId,
+      message: [
+        `Rewrite the draft below to at most ${budgetBytes} UTF-8 bytes.`,
+        "Preserve the answer's meaning and essential facts.",
+        "Return only one plain-text sentence: no Markdown, preamble, explanation, sign-off, delivery status, or byte count.",
+        "Draft:",
+        draft,
+      ].join("\n"),
+      extraSystemPrompt: [
+        "This is a fresh, tool-free MeshCore reply compression pass.",
+        `Your entire output must be at most ${budgetBytes} UTF-8 bytes.`,
+        "Output only the rewritten radio reply.",
+      ].join(" "),
+      timeoutMs: 30_000,
+    });
+    return result.text;
+  };
+}
+
+export async function constrainedRadioReply(
+  text: string,
+  options: {
+    budgetBytes?: number;
+    repair?: RadioReplyRepair;
+  } = {},
+): Promise<string | undefined> {
+  const budgetBytes = options.budgetBytes ?? meshCoreAgentTargetBytes;
+  const normalized = normalizedRadioText(text);
+  if (!normalized) return undefined;
+  if (isRestartRecoveryNotice(normalized)) return undefined;
+
+  const direct = nativeRadioReply(normalized);
+  if (direct && utf8Bytes(direct) <= budgetBytes) return direct;
+
+  const repair = options.repair;
+  if (!repair) return undefined;
+  let repaired: string;
+  try {
+    repaired = normalizedRadioText(await repair(normalized, budgetBytes));
+  } catch {
+    return undefined;
+  }
+  if (!repaired || utf8Bytes(repaired) > budgetBytes) return undefined;
+  return repaired;
 }
 
 function escapeRegex(text: string): string {
@@ -357,16 +447,18 @@ export function privateChannelInvocation(text: string, nodeName: string): string
   return body || undefined;
 }
 
-export function privateChannelRadioReply(label: string, text: string): string | undefined {
-  const response = nativeRadioReply(text);
-  if (!response) return undefined;
+export async function privateChannelRadioReply(
+  label: string,
+  text: string,
+  repair?: RadioReplyRepair,
+): Promise<string | undefined> {
   const prefix = `${label.trim()}: `;
+  const bodyBudget = meshCoreAgentTargetBytes - utf8Bytes(prefix);
+  if (bodyBudget <= 0) return undefined;
+  const response = await constrainedRadioReply(text, { budgetBytes: bodyBudget, repair });
+  if (!response) return undefined;
   const combined = `${prefix}${response}`;
-  if (new TextEncoder().encode(combined).length <= meshCoreAgentTargetBytes) return combined;
-  const fallback = `${prefix}Reply too long.`;
-  return new TextEncoder().encode(fallback).length <= meshCoreAgentTargetBytes
-    ? fallback
-    : nativeReplyTooLong;
+  return utf8Bytes(combined) <= meshCoreAgentTargetBytes ? combined : undefined;
 }
 
 export function acceptsDirectDeliveryState(
@@ -458,7 +550,7 @@ const outbound = {
       const client = new MeshPincerClient(account.socketPath);
       const status = parseStatus(await client.get("/v1/status"));
       const label = account.channelSenderLabel ?? status.radio?.node_name ?? "MeshCore agent";
-      const reply = privateChannelRadioReply(label, text);
+      const reply = await privateChannelRadioReply(label, text);
       if (!reply) return { messageId: "suppressed-local-recovery" };
       const result = await sendChannel(
         client,
@@ -467,7 +559,7 @@ const outbound = {
       );
       return { messageId: result.messageId };
     }
-    const reply = nativeRadioReply(text);
+    const reply = await constrainedRadioReply(text);
     if (!reply) return { messageId: "suppressed-local-recovery" };
     const result = await sendDirect(
       new MeshPincerClient(account.socketPath),
@@ -556,7 +648,6 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
         const allow = new Set(ctx.account.allowDirectFrom);
         const allowedChannels = new Set(ctx.account.allowChannelIndices);
         const status = parseStatus(await client.get("/v1/status"));
-        const selfKey = status.radio?.public_key ?? "unknown";
         const selfName = status.radio?.node_name ?? "MeshCore agent";
         ctx.setStatus({
           accountId: ctx.account.accountId,
@@ -584,6 +675,20 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
               if (!allowedChannels.has(channelIndex)) return;
               const body = privateChannelInvocation(rawText, selfName);
               if (!body) return;
+
+              const label = ctx.account.channelSenderLabel ?? selfName;
+              const exact = exactReplyRequest(body);
+              if (exact) {
+                const response = await privateChannelRadioReply(label, exact, async () => "");
+                if (!response) {
+                  ctx.log?.warn?.(
+                    `meshcore suppressed exact group reply for event ${event.id}: exceeds RF budget`,
+                  );
+                  return;
+                }
+                await sendChannel(client, channelIndex, response);
+                return;
+              }
 
               const target = `meshcore:channel:${channelIndex}`;
               const route = resolveAgentRoute({
@@ -663,9 +768,17 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
                 },
                 delivery: {
                   deliver: async (payload: unknown) => {
-                    const label = ctx.account.channelSenderLabel ?? selfName;
-                    const response = privateChannelRadioReply(label, replyText(payload));
-                    if (!response) return { visibleReplySent: false };
+                    const response = await privateChannelRadioReply(
+                      label,
+                      replyText(payload),
+                      runtimeRadioReplyRepair(route.agentId),
+                    );
+                    if (!response) {
+                      ctx.log?.warn?.(
+                        `meshcore suppressed invalid group reply for event ${event.id}`,
+                      );
+                      return { visibleReplySent: false };
+                    }
                     const result = await sendChannel(client, channelIndex, response);
                     return {
                       messageIds: [result.messageId],
@@ -688,41 +801,111 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
               return;
             }
             const peerPrefix = peerKey.slice(0, 12);
-            await dispatchInboundDirectDm({
+            const exact = exactReplyRequest(text);
+            if (exact) {
+              const response = nativeRadioReply(exact);
+              if (!response) {
+                ctx.log?.warn?.(
+                  `meshcore suppressed exact direct reply for event ${event.id}: exceeds RF budget`,
+                );
+                return;
+              }
+              const result = await sendDirect(client, peerKey, response, false);
+              if (result.deliveryState === "timed_out") {
+                ctx.log?.warn?.(
+                  `meshcore exact reply ${result.messageId} transmitted without ACK; not resending`,
+                );
+              }
+              return;
+            }
+
+            const target = `meshcore:${peerKey}`;
+            const route = resolveAgentRoute({
               cfg: ctx.cfg,
               channel: "meshcore",
-              channelLabel: "MeshCore",
               accountId: ctx.account.accountId,
               peer: { kind: "direct", id: peerKey },
-              senderId: peerKey,
-              senderAddress: `meshcore:${peerKey}`,
-              recipientAddress: `meshcore:${selfKey}`,
-              conversationLabel: `MeshCore ${peerPrefix}`,
-              rawBody: text,
-              bodyForAgent: text,
+            });
+            const ctxPayload = runtime.inbound.buildContext({
+              channel: "meshcore",
+              accountId: ctx.account.accountId,
+              provider: "meshcore",
+              surface: "meshcore",
               messageId: `meshpincer-event-${event.id}`,
               timestamp: event.recorded_at ? Date.parse(event.recorded_at) : undefined,
-              commandAuthorized: false,
-              inboundAccessAuthorized: true,
+              from: target,
+              sender: { id: peerKey, displayLabel: `MeshCore ${peerPrefix}` },
+              conversation: {
+                kind: "direct",
+                id: peerKey,
+                label: `MeshCore ${peerPrefix}`,
+                routePeer: { kind: "direct", id: peerKey },
+              },
+              route: {
+                agentId: route.agentId,
+                accountId: route.accountId,
+                routeSessionKey: route.sessionKey,
+                mainSessionKey: route.mainSessionKey,
+                createIfMissing: true,
+              },
+              reply: {
+                to: target,
+                originatingTo: target,
+                replyTarget: target,
+                deliveryTarget: target,
+                sourceReplyDeliveryMode: "direct",
+              },
+              message: {
+                rawBody: text,
+                bodyForAgent: text,
+                commandBody: text,
+                senderLabel: `MeshCore ${peerPrefix}`,
+              },
+              access: { commands: { authorized: false } },
               channelIngress: "unsupported",
-              channelRuntime: ctx.channelRuntime as
-                | { inbound?: { buildContext?: unknown } }
-                | undefined,
-              deliver: async (payload) => {
-                const response = nativeRadioReply(replyText(payload));
-                if (response) {
+            });
+            await runtime.inbound.dispatch({
+              cfg: ctx.cfg,
+              channel: "meshcore",
+              accountId: ctx.account.accountId,
+              route: {
+                agentId: route.agentId,
+                dmScope: route.dmScope,
+                sessionKey: route.sessionKey,
+              },
+              ctxPayload,
+              toolsAllow: [],
+              record: {
+                createIfMissing: true,
+                onRecordError: (error: unknown) =>
+                  ctx.log?.error?.(`meshcore inbound record failed: ${String(error)}`),
+              },
+              delivery: {
+                deliver: async (payload: unknown) => {
+                  const response = await constrainedRadioReply(replyText(payload), {
+                    repair: runtimeRadioReplyRepair(route.agentId),
+                  });
+                  if (!response) {
+                    ctx.log?.warn?.(
+                      `meshcore suppressed invalid direct reply for event ${event.id}`,
+                    );
+                    return { visibleReplySent: false };
+                  }
                   const result = await sendDirect(client, peerKey, response, false);
                   if (result.deliveryState === "timed_out") {
                     ctx.log?.warn?.(
                       `meshcore reply ${result.messageId} transmitted without ACK; not resending`,
                     );
                   }
-                }
+                  return {
+                    messageIds: [result.messageId],
+                    visibleReplySent: true,
+                    content: response,
+                  };
+                },
+                onError: (error: unknown) =>
+                  ctx.log?.error?.(`meshcore inbound dispatch failed: ${String(error)}`),
               },
-              onRecordError: (error) =>
-                ctx.log?.error?.(`meshcore inbound record failed: ${String(error)}`),
-              onDispatchError: (error) =>
-                ctx.log?.error?.(`meshcore inbound dispatch failed: ${String(error)}`),
             });
           },
           onError: (error) => {

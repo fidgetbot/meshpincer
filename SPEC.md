@@ -155,10 +155,12 @@ The transmit path must implement the project policy in
   presented as acknowledgement, and retry exhaustion is reported honestly.
 - Native agent replies target at most 75 UTF-8 bytes and use fewer when useful;
   160 UTF-8 bytes is a hard firmware ceiling. Limits are measured after UTF-8
-  encoding. The native adapter enforces the 75-byte budget: oversized output is
-  replaced by one short error, and transport-recovery notices are kept off RF.
-  Delivery uncertainty never triggers explanatory RF traffic or an automatic
-  resend.
+  encoding. MeshCore turns receive a system-level RF reply contract and an empty
+  optional-tool surface. Exact-reply requests bypass free-form generation. An
+  oversized draft gets at most one fresh, tool-free compression pass and is
+  measured again; invalid output is suppressed rather than replaced by more RF
+  traffic. Transport-recovery notices stay off RF, and delivery uncertainty
+  never triggers explanatory traffic or an automatic resend.
 - Cross-network forwarding always has an explicit destination and does not
   mirror private content or precise coordinates by default.
 - Transmission fails closed until frequency, power, duty cycle, regional scope,
@@ -194,9 +196,9 @@ are implemented and covered by deterministic tests, including restart and
 concurrent-redelivery cases. Public-channel reception and an encrypted direct
 message from a second physical node have now been proven through the packaged
 daemon, including full-public-key sender resolution and persistence across a
-clean daemon restart. A single zero-hop direct message was transmitted through
-the daemon and acknowledged with the expected ACK code, without retry or flood
-fallback. See
+clean daemon restart. Direct messages have been transmitted over zero-hop and
+learned multi-hop routes, with unknown/flood fallback rejected and no automatic
+retry. See
 [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 Contact import/delete and private-channel set/rename/clear are also performed
@@ -241,7 +243,8 @@ and connected in a live OpenClaw Gateway. It uses a dedicated durable consumer
 cursor, baselines a new consumer at the current event head, maps conversations
 by full peer public key, and advances only after successful dispatch. Inbound
 DMs are allowlisted by public key. Replies are normalized to one concise radio
-message and delivered through the daemon's acknowledged zero-hop send path.
+message and delivered through the daemon's learned direct-route send path;
+unknown/flood routes are rejected.
 The first live inbound DM created the expected stable OpenClaw conversation and
 produced an RF reply. That test also proved that a generic delivery-recovery
 message can waste airtime when an ACK is uncertain, so native replies now keep
