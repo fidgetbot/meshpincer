@@ -166,5 +166,12 @@ changes only the `overwrite oldest non-favorite when full` bit, and verifies
 the full read-back so other auto-add type and hop-limit settings cannot be
 silently reset.
 
+The live Wio initially reported auto-add mask `0`, hop limit `0`, and overwrite
+disabled. MeshPincer enabled only bit 0 and read back mask `1` with the hop
+limit unchanged. The two controlled companion contacts were marked favorite;
+their routes survived the update. The radio's transmitted-packet counter was
+unchanged across the setting and contact updates, confirming that the USB-only
+management operations emitted no RF traffic.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.
