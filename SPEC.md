@@ -63,7 +63,12 @@ Initial endpoints:
 
 - `GET /v1/status`
 - `GET /v1/contacts`
+- `PUT /v1/contacts/{public_key}`
+- `DELETE /v1/contacts/{public_key}`
 - `GET /v1/channels?include_empty=<bool>`
+- `PUT /v1/channels/{channel_index}`
+- `PATCH /v1/channels/{channel_index}`
+- `DELETE /v1/channels/{channel_index}`
 - `GET /v1/messages?after_id=<id>&limit=<n>`
 - `GET /v1/events?after_id=<id>&limit=<n>`
 - `GET /v1/consumers/{consumer_id}/events?limit=<n>`
@@ -75,6 +80,15 @@ Initial endpoints:
 - `PATCH /v1/repeaters/{public_key}/config`
 
 The API is local-only. It must not bind a TCP listener by default.
+
+The daemon remains the sole serial-port owner for device mutations. It
+serializes contact and channel changes with receive/send operations, refreshes
+its cache from the companion immediately afterward, and returns only verified
+read-back state. Contact deletion rejects unknown keys. Channel mutations
+reject slot 0 (`Public`) and indices outside the device-reported slot range.
+Private-channel secrets are accepted only by the set request and never appear
+in responses or audit events. These administrative endpoints are not exposed
+as general agent tools by default.
 
 ## Persistence model
 
@@ -184,6 +198,11 @@ clean daemon restart. A single zero-hop direct message was transmitted through
 the daemon and acknowledged with the expected ACK code, without retry or flood
 fallback. See
 [`docs/hardware-validation.md`](docs/hardware-validation.md).
+
+Contact import/delete and private-channel set/rename/clear are also performed
+through the long-lived daemon connection. They share the radio operation lock,
+refresh state by read-back, and no longer require stopping the daemon so a
+second process can claim the USB port.
 
 ### M2 — operator tools
 

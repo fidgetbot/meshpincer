@@ -33,6 +33,22 @@ class RadioBackend(Protocol):
 
     async def read_channels(self, count: int) -> Sequence[Mapping[str, Any]]: ...
 
+    async def upsert_contact(
+        self,
+        public_key: str,
+        name: str,
+        node_type: int,
+        flags: int,
+    ) -> None: ...
+
+    async def remove_contact(self, public_key: str) -> None: ...
+
+    async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None: ...
+
+    async def rename_channel(self, channel_index: int, name: str) -> None: ...
+
+    async def clear_channel(self, channel_index: int) -> None: ...
+
     async def start_receiving(self, handler: InboundHandler) -> None: ...
 
     async def send_direct(
@@ -158,6 +174,69 @@ class MeshCoreBackend:
                 }
             )
         return channels
+
+    async def upsert_contact(
+        self,
+        public_key: str,
+        name: str,
+        node_type: int,
+        flags: int,
+    ) -> None:
+        normalized_key = public_key.lower()
+        current = next(
+            (
+                dict(contact)
+                for contact in self.client.contacts.values()
+                if str(contact.get("public_key", "")).lower() == normalized_key
+            ),
+            None,
+        )
+        contact = current or {
+            "public_key": normalized_key,
+            "out_path_len": -1,
+            "out_path_hash_mode": 0,
+            "out_path": "",
+            "last_advert": 0,
+            "adv_lat": 0.0,
+            "adv_lon": 0.0,
+        }
+        contact.update(
+            {
+                "public_key": normalized_key,
+                "adv_name": name,
+                "type": node_type,
+                "flags": flags,
+            }
+        )
+        _event_payload(
+            await self.client.commands.add_contact(contact),
+            "contact upsert",
+        )
+
+    async def remove_contact(self, public_key: str) -> None:
+        _event_payload(
+            await self.client.commands.remove_contact(public_key),
+            "contact removal",
+        )
+
+    async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None:
+        _event_payload(
+            await self.client.commands.set_channel(channel_index, name, secret),
+            f"channel {channel_index} configuration",
+        )
+
+    async def rename_channel(self, channel_index: int, name: str) -> None:
+        channel = _event_payload(
+            await self.client.commands.get_channel(channel_index),
+            f"channel {channel_index}",
+        )
+        secret = channel.get("channel_secret")
+        if not isinstance(secret, bytes) or len(secret) != 16 or not any(secret):
+            raise ValueError("channel is not configured")
+        await self.set_channel(channel_index, name, secret)
+
+    async def clear_channel(self, channel_index: int) -> None:
+        await self.set_channel(channel_index, "", bytes(16))
 
     async def start_receiving(self, handler: InboundHandler) -> None:
         if self._receiving:
@@ -369,6 +448,77 @@ class RadioManager:
                 else [item for item in self._channels if item.configured]
             )
             return [channel.model_copy(deep=True) for channel in channels]
+
+    async def upsert_contact(
+        self,
+        public_key: str,
+        name: str,
+        node_type: int,
+        flags: int,
+    ) -> ContactRecord:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await backend.upsert_contact(normalized_key, name, node_type, flags)
+            contacts = await backend.read_contacts()
+            records = self._contact_records(contacts)
+            contact = next(
+                (item for item in records if item.public_key.lower() == normalized_key),
+                None,
+            )
+            if contact is None:
+                raise ConnectionError("contact upsert did not read back from the radio")
+            async with self._lock:
+                self._contacts = records
+            return contact.model_copy(deep=True)
+
+    async def remove_contact(self, public_key: str) -> str:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            async with self._lock:
+                exists = any(
+                    item.public_key.lower() == normalized_key for item in self._contacts
+                )
+            if not exists:
+                raise ValueError("contact is not known to the companion radio")
+            await backend.remove_contact(normalized_key)
+            contacts = await backend.read_contacts()
+            records = self._contact_records(contacts)
+            if any(item.public_key.lower() == normalized_key for item in records):
+                raise ConnectionError("contact removal did not read back from the radio")
+            async with self._lock:
+                self._contacts = records
+            return normalized_key
+
+    async def set_channel(
+        self,
+        channel_index: int,
+        name: str,
+        secret: bytes,
+    ) -> ChannelRecord:
+        self._validate_private_channel_index(channel_index)
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await self._validate_channel_exists(channel_index)
+            await backend.set_channel(channel_index, name, secret)
+            return await self._refresh_channel_cache(backend, channel_index)
+
+    async def rename_channel(self, channel_index: int, name: str) -> ChannelRecord:
+        self._validate_private_channel_index(channel_index)
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await self._validate_channel_exists(channel_index)
+            await backend.rename_channel(channel_index, name)
+            return await self._refresh_channel_cache(backend, channel_index)
+
+    async def clear_channel(self, channel_index: int) -> ChannelRecord:
+        self._validate_private_channel_index(channel_index)
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await self._validate_channel_exists(channel_index)
+            await backend.clear_channel(channel_index)
+            return await self._refresh_channel_cache(backend, channel_index)
 
     async def send_direct(
         self,
@@ -592,7 +742,43 @@ class RadioManager:
             telemetry=_telemetry(payloads["telemetry"]),
             last_refreshed_at=datetime.now(UTC),
         )
-        contact_records = [
+        contact_records = self._contact_records(contacts)
+        channel_records = self._channel_records(channels)
+        async with self._lock:
+            self._status = status
+            self._contacts = contact_records
+            self._channels = channel_records
+
+    async def _connected_backend(self) -> RadioBackend:
+        async with self._lock:
+            backend = self._backend
+            connected = self._status.connected
+        if not connected or backend is None:
+            raise ConnectionError("MeshCore radio is not connected")
+        return backend
+
+    async def _refresh_channel_cache(
+        self,
+        backend: RadioBackend,
+        channel_index: int,
+    ) -> ChannelRecord:
+        async with self._lock:
+            channel_count = len(self._channels)
+        records = self._channel_records(await backend.read_channels(channel_count))
+        channel = next(item for item in records if item.index == channel_index)
+        async with self._lock:
+            self._channels = records
+        return channel.model_copy(deep=True)
+
+    async def _validate_channel_exists(self, channel_index: int) -> None:
+        async with self._lock:
+            channel_count = len(self._channels)
+        if channel_index >= channel_count:
+            raise ValueError("channel index is outside the companion radio's slot range")
+
+    @staticmethod
+    def _contact_records(contacts: Sequence[Mapping[str, Any]]) -> list[ContactRecord]:
+        return [
             ContactRecord(
                 public_key=str(contact["public_key"]),
                 name=str(contact.get("adv_name", "")),
@@ -603,7 +789,10 @@ class RadioManager:
             )
             for contact in contacts
         ]
-        channel_records = [
+
+    @staticmethod
+    def _channel_records(channels: Sequence[Mapping[str, Any]]) -> list[ChannelRecord]:
+        return [
             ChannelRecord(
                 index=int(channel["channel_idx"]),
                 name=str(channel.get("channel_name", "")),
@@ -612,10 +801,12 @@ class RadioManager:
             )
             for channel in channels
         ]
-        async with self._lock:
-            self._status = status
-            self._contacts = contact_records
-            self._channels = channel_records
+
+    def _validate_private_channel_index(self, channel_index: int) -> None:
+        if channel_index == 0:
+            raise SendPolicyError("Public channel configuration is disabled")
+        if channel_index < 0:
+            raise ValueError("channel index must be non-negative")
 
     async def _disconnect(self) -> None:
         backend, self._backend = self._backend, None

@@ -71,11 +71,47 @@ class ContactRecord(BaseModel):
     last_advert: int | None = None
 
 
+class UpsertContactRequest(BaseModel):
+    name: str = Field(min_length=1)
+    node_type: int = Field(ge=0, le=4)
+    flags: int = Field(default=0, ge=0, le=255)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 32:
+            raise ValueError("contact name must be at most 32 UTF-8 bytes")
+        return value
+
+
 class ChannelRecord(BaseModel):
     index: int = Field(ge=0)
     name: str
     configured: bool
     channel_hash: str | None = None
+
+
+class SetChannelRequest(BaseModel):
+    name: str = Field(min_length=1)
+    secret_hex: str = Field(pattern=r"^[0-9A-Fa-f]{32}$", exclude=True)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 32:
+            raise ValueError("channel name must be at most 32 UTF-8 bytes")
+        return value
+
+
+class RenameChannelRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 32:
+            raise ValueError("channel name must be at most 32 UTF-8 bytes")
+        return value
 
 
 class RepeaterStatus(BaseModel):

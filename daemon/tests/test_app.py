@@ -19,6 +19,15 @@ from meshpincer.store import Store
 class FakeRadioManager:
     def __init__(self) -> None:
         self.started = False
+        self.contact_mutations: list[tuple[str, str]] = []
+        self.channel_mutations: list[tuple[str, int, str]] = []
+        self.contact_records = {
+            "ab" * 32: ContactRecord(public_key="ab" * 32, name="Test peer")
+        }
+        self.channel_records = [
+            ChannelRecord(index=0, name="Public", configured=True, channel_hash="11"),
+            ChannelRecord(index=1, name="", configured=False, channel_hash="37"),
+        ]
 
     async def start(self) -> None:
         self.started = True
@@ -30,14 +39,66 @@ class FakeRadioManager:
         return RadioStatus()
 
     async def contacts(self) -> list[ContactRecord]:
-        return [ContactRecord(public_key="ab" * 32, name="Test peer")]
+        return list(self.contact_records.values())
+
+    async def upsert_contact(
+        self,
+        public_key: str,
+        name: str,
+        node_type: int,
+        flags: int,
+    ) -> ContactRecord:
+        record = ContactRecord(
+            public_key=public_key,
+            name=name,
+            node_type=node_type,
+            flags=flags,
+            path_length=-1,
+        )
+        self.contact_records[public_key] = record
+        self.contact_mutations.append(("upsert", public_key))
+        return record
+
+    async def remove_contact(self, public_key: str) -> str:
+        if public_key not in self.contact_records:
+            raise ValueError("contact is not known to the companion radio")
+        del self.contact_records[public_key]
+        self.contact_mutations.append(("remove", public_key))
+        return public_key
 
     async def channels(self, *, include_empty: bool = False) -> list[ChannelRecord]:
-        channels = [
-            ChannelRecord(index=0, name="Public", configured=True, channel_hash="11"),
-            ChannelRecord(index=1, name="", configured=False, channel_hash="37"),
-        ]
-        return channels if include_empty else channels[:1]
+        return (
+            list(self.channel_records)
+            if include_empty
+            else [channel for channel in self.channel_records if channel.configured]
+        )
+
+    async def set_channel(
+        self,
+        channel_index: int,
+        name: str,
+        secret: bytes,
+    ) -> ChannelRecord:
+        assert channel_index == 1
+        assert len(secret) == 16 and any(secret)
+        record = ChannelRecord(index=1, name=name, configured=True, channel_hash="42")
+        self.channel_records[1] = record
+        self.channel_mutations.append(("set", channel_index, name))
+        return record
+
+    async def rename_channel(self, channel_index: int, name: str) -> ChannelRecord:
+        assert channel_index == 1
+        record = self.channel_records[1].model_copy(update={"name": name})
+        self.channel_records[1] = record
+        self.channel_mutations.append(("rename", channel_index, name))
+        return record
+
+    async def clear_channel(self, channel_index: int) -> ChannelRecord:
+        assert channel_index == 1
+        record = ChannelRecord(index=1, name="", configured=False, channel_hash="37")
+        self.channel_records[1] = record
+        self.channel_mutations.append(("clear", channel_index, ""))
+        return record
 
     async def send_direct(self, public_key: str, text: str, on_transmitted):
         assert public_key == "ab" * 32
@@ -134,6 +195,105 @@ async def test_contacts_and_channels_come_from_radio_manager(settings: Settings)
         {"index": 0, "name": "Public", "configured": True, "channel_hash": "11"}
     ]
     assert len(all_channels.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_contact_management_uses_radio_manager_and_records_audit_events(
+    settings: Settings,
+) -> None:
+    radio = FakeRadioManager()
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    key = "cd" * 32
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            added = await client.put(
+                f"/v1/contacts/{key}",
+                json={"name": "New peer", "node_type": 1, "flags": 0},
+            )
+            removed = await client.delete(f"/v1/contacts/{key}")
+            events = await client.get("/v1/events")
+
+    assert added.status_code == 200
+    assert added.json()["name"] == "New peer"
+    assert removed.json() == {"public_key": key, "removed": True}
+    assert radio.contact_mutations == [("upsert", key), ("remove", key)]
+    assert [event["kind"] for event in events.json()] == [
+        "contact.upsert.requested",
+        "contact.upsert.succeeded",
+        "contact.remove.requested",
+        "contact.remove.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_channel_management_never_returns_or_audits_secret(settings: Settings) -> None:
+    radio = FakeRadioManager()
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    secret_hex = "a5" * 16
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            configured = await client.put(
+                "/v1/channels/1",
+                json={"name": "Private", "secret_hex": secret_hex},
+            )
+            renamed = await client.patch(
+                "/v1/channels/1",
+                json={"name": "Renamed"},
+            )
+            cleared = await client.delete("/v1/channels/1")
+            events = await client.get("/v1/events")
+
+    serialized = str(
+        {
+            "configured": configured.json(),
+            "renamed": renamed.json(),
+            "cleared": cleared.json(),
+            "events": events.json(),
+        }
+    )
+    assert configured.json()["name"] == "Private"
+    assert renamed.json()["name"] == "Renamed"
+    assert cleared.json()["configured"] is False
+    assert secret_hex not in serialized
+    assert radio.channel_mutations == [
+        ("set", 1, "Private"),
+        ("rename", 1, "Renamed"),
+        ("clear", 1, ""),
+    ]
+    assert [event["kind"] for event in events.json()] == [
+        "channel.set.requested",
+        "channel.set.succeeded",
+        "channel.rename.requested",
+        "channel.rename.succeeded",
+        "channel.clear.requested",
+        "channel.clear.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_management_validation_rejects_public_slot_and_long_names(
+    settings: Settings,
+) -> None:
+    radio = FakeRadioManager()
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            public = await client.put(
+                "/v1/channels/0",
+                json={"name": "No", "secret_hex": "a5" * 16},
+            )
+            long_name = await client.put(
+                f"/v1/contacts/{'cd' * 32}",
+                json={"name": "🙂" * 9, "node_type": 1},
+            )
+
+    assert public.status_code == 422
+    assert long_name.status_code == 422
+    assert radio.channel_mutations == []
+    assert radio.contact_mutations == []
 
 
 @pytest.mark.asyncio

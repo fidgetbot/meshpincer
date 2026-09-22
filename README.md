@@ -25,6 +25,12 @@ The Python daemon exclusively owns the radio connection. The TypeScript plugin
 talks to it over a local Unix-domain socket, so OpenClaw restarts do not prevent
 the daemon from collecting inbound messages.
 
+Device mutations use that same daemon-owned connection. Contact imports and
+deletions, plus private-channel set, rename, and clear operations, are
+serialized with message traffic and verified by immediate radio read-back.
+They do not require handing the serial port to a helper process or restarting
+the daemon. Public-channel configuration remains blocked.
+
 The project is intentionally reusable: device names, agent names, network
 profiles, contacts, and channels are discovered or configured at runtime rather
 than compiled into MeshPincer.
@@ -125,6 +131,11 @@ outcome durably, and enforces global and per-repeater cooldowns. It never polls
 automatically or retries a timed-out request. Authenticated repeater
 configuration remains disabled until its read/change/read-back path is
 implemented and hardware-proven.
+
+The contact and private-channel management endpoints are intentionally local
+administrative APIs on the Unix socket, not general-purpose OpenClaw agent
+tools. Channel secrets are accepted only for a set operation and are never
+returned, logged, or written to the SQLite event payloads.
 
 ## Project status
 

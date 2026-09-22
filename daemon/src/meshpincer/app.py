@@ -14,11 +14,14 @@ from .models import (
     DeliveryState,
     EventRecord,
     MessageRecord,
+    RenameChannelRequest,
     RepeaterConfigRequest,
     RepeaterStatus,
     SendMessageRequest,
     SendMessageResult,
     ServiceStatus,
+    SetChannelRequest,
+    UpsertContactRequest,
 )
 from .radio import RadioManager, SendPolicyError
 from .store import Store
@@ -56,9 +59,150 @@ def create_app(
     async def contacts() -> list[ContactRecord]:
         return await radio.contacts()
 
+    @app.put("/v1/contacts/{public_key}", response_model=ContactRecord)
+    async def upsert_contact(
+        request: UpsertContactRequest,
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> ContactRecord:
+        normalized_key = public_key.lower()
+        await store.append_event(
+            "contact.upsert.requested",
+            {
+                "public_key": normalized_key,
+                "name": request.name,
+                "node_type": request.node_type,
+                "flags": request.flags,
+            },
+        )
+        try:
+            contact = await radio.upsert_contact(
+                normalized_key,
+                request.name,
+                request.node_type,
+                request.flags,
+            )
+        except ValueError as exc:
+            await store.append_event(
+                "contact.upsert.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "contact.upsert.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("contact.upsert.succeeded", contact.model_dump(mode="json"))
+        return contact
+
+    @app.delete("/v1/contacts/{public_key}")
+    async def remove_contact(
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> dict[str, object]:
+        normalized_key = public_key.lower()
+        await store.append_event("contact.remove.requested", {"public_key": normalized_key})
+        try:
+            removed_key = await radio.remove_contact(normalized_key)
+        except ValueError as exc:
+            await store.append_event(
+                "contact.remove.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "contact.remove.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("contact.remove.succeeded", {"public_key": removed_key})
+        return {"public_key": removed_key, "removed": True}
+
     @app.get("/v1/channels", response_model=list[ChannelRecord])
     async def channels(include_empty: bool = False) -> list[ChannelRecord]:
         return await radio.channels(include_empty=include_empty)
+
+    @app.put("/v1/channels/{channel_index}", response_model=ChannelRecord)
+    async def set_channel(
+        request: SetChannelRequest,
+        channel_index: int = Path(ge=1),
+    ) -> ChannelRecord:
+        await store.append_event(
+            "channel.set.requested",
+            {"channel_index": channel_index, "name": request.name},
+        )
+        try:
+            channel = await radio.set_channel(
+                channel_index,
+                request.name,
+                bytes.fromhex(request.secret_hex),
+            )
+        except ValueError as exc:
+            await store.append_event(
+                "channel.set.rejected",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "channel.set.failed",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("channel.set.succeeded", channel.model_dump(mode="json"))
+        return channel
+
+    @app.patch("/v1/channels/{channel_index}", response_model=ChannelRecord)
+    async def rename_channel(
+        request: RenameChannelRequest,
+        channel_index: int = Path(ge=1),
+    ) -> ChannelRecord:
+        await store.append_event(
+            "channel.rename.requested",
+            {"channel_index": channel_index, "name": request.name},
+        )
+        try:
+            channel = await radio.rename_channel(channel_index, request.name)
+        except ValueError as exc:
+            await store.append_event(
+                "channel.rename.rejected",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "channel.rename.failed",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("channel.rename.succeeded", channel.model_dump(mode="json"))
+        return channel
+
+    @app.delete("/v1/channels/{channel_index}", response_model=ChannelRecord)
+    async def clear_channel(
+        channel_index: int = Path(ge=1),
+    ) -> ChannelRecord:
+        await store.append_event(
+            "channel.clear.requested",
+            {"channel_index": channel_index},
+        )
+        try:
+            channel = await radio.clear_channel(channel_index)
+        except ValueError as exc:
+            await store.append_event(
+                "channel.clear.rejected",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "channel.clear.failed",
+                {"channel_index": channel_index, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("channel.clear.succeeded", channel.model_dump(mode="json"))
+        return channel
 
     @app.get("/v1/messages", response_model=list[MessageRecord])
     async def messages(

@@ -23,8 +23,23 @@ class FakeBackend:
         self.contact_node_type = 1
         self.sent: list[tuple[str, str]] = []
         self.channel_one_configured = False
+        self.channel_one_name = ""
         self.channel_sent: list[tuple[int, str]] = []
         self.repeater_status_requests: list[tuple[str, float]] = []
+        self.contact_records: dict[str, dict[str, Any]] = {
+            "34" * 32: {
+                "public_key": "34" * 32,
+                "adv_name": "Peer",
+                "type": self.contact_node_type,
+                "flags": 0,
+                "out_path_len": self.contact_path_length,
+                "last_advert": 100,
+                "adv_lat": 47.1,
+                "adv_lon": -122.1,
+            }
+        }
+        self.contact_mutations: list[tuple[str, str]] = []
+        self.channel_mutations: list[tuple[str, int, str]] = []
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -62,18 +77,11 @@ class FakeBackend:
         )
 
     async def read_contacts(self) -> list[dict[str, Any]]:
-        return [
-            {
-                "public_key": "34" * 32,
-                "adv_name": "Peer",
-                "type": self.contact_node_type,
-                "flags": 0,
-                "out_path_len": self.contact_path_length,
-                "last_advert": 100,
-                "adv_lat": 47.1,
-                "adv_lon": -122.1,
-            }
-        ]
+        peer = self.contact_records.get("34" * 32)
+        if peer is not None:
+            peer["type"] = self.contact_node_type
+            peer["out_path_len"] = self.contact_path_length
+        return [dict(contact) for contact in self.contact_records.values()]
 
     async def read_channels(self, count: int) -> list[dict[str, Any]]:
         assert count == 2
@@ -87,11 +95,51 @@ class FakeBackend:
             },
             {
                 "channel_idx": 1,
-                "channel_name": "",
+                "channel_name": self.channel_one_name,
                 "channel_hash": "37",
                 "configured": self.channel_one_configured,
             },
         ]
+
+    async def upsert_contact(
+        self,
+        public_key: str,
+        name: str,
+        node_type: int,
+        flags: int,
+    ) -> None:
+        current = self.contact_records.get(public_key, {})
+        self.contact_records[public_key] = {
+            "public_key": public_key,
+            "adv_name": name,
+            "type": node_type,
+            "flags": flags,
+            "out_path_len": current.get("out_path_len", -1),
+            "last_advert": current.get("last_advert", 0),
+            "adv_lat": current.get("adv_lat", 0.0),
+            "adv_lon": current.get("adv_lon", 0.0),
+        }
+        self.contact_mutations.append(("upsert", public_key))
+
+    async def remove_contact(self, public_key: str) -> None:
+        self.contact_records.pop(public_key, None)
+        self.contact_mutations.append(("remove", public_key))
+
+    async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None:
+        assert channel_index == 1
+        self.channel_one_configured = any(secret)
+        self.channel_one_name = name
+        self.channel_mutations.append(("set", channel_index, name))
+
+    async def rename_channel(self, channel_index: int, name: str) -> None:
+        assert self.channel_one_configured
+        self.channel_one_name = name
+        self.channel_mutations.append(("rename", channel_index, name))
+
+    async def clear_channel(self, channel_index: int) -> None:
+        self.channel_one_configured = False
+        self.channel_one_name = ""
+        self.channel_mutations.append(("clear", channel_index, ""))
 
     async def start_receiving(self, handler) -> None:
         self.receiver = handler
@@ -201,6 +249,117 @@ async def test_manager_discovers_refreshes_and_sanitizes(tmp_path: Path) -> None
     assert "channel_secret" not in repr(all_channels)
     assert "private-hardware-id" not in status.model_dump_json()
     assert backend.disconnected
+
+
+async def test_manager_mutates_contacts_without_reconnecting(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        radio_task = manager._task
+        added = await manager.upsert_contact("56" * 32, "New peer", 1, 0)
+        contacts_after_add = await manager.contacts()
+        removed_key = await manager.remove_contact("56" * 32)
+        contacts_after_remove = await manager.contacts()
+
+        assert manager._task is radio_task
+        assert not backend.disconnected
+    finally:
+        await manager.stop()
+
+    assert added.name == "New peer"
+    assert added.path_length == -1
+    assert any(item.public_key == "56" * 32 for item in contacts_after_add)
+    assert removed_key == "56" * 32
+    assert all(item.public_key != "56" * 32 for item in contacts_after_remove)
+    assert backend.contact_mutations == [
+        ("upsert", "56" * 32),
+        ("remove", "56" * 32),
+    ]
+
+
+async def test_manager_mutates_private_channel_without_reconnecting(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        radio_task = manager._task
+        configured = await manager.set_channel(1, "Private", bytes.fromhex("ab" * 16))
+        renamed = await manager.rename_channel(1, "Renamed")
+        cleared = await manager.clear_channel(1)
+
+        assert manager._task is radio_task
+        assert not backend.disconnected
+    finally:
+        await manager.stop()
+
+    assert (configured.name, configured.configured) == ("Private", True)
+    assert (renamed.name, renamed.configured) == ("Renamed", True)
+    assert (cleared.name, cleared.configured) == ("", False)
+    assert backend.channel_mutations == [
+        ("set", 1, "Private"),
+        ("rename", 1, "Renamed"),
+        ("clear", 1, ""),
+    ]
+
+
+async def test_manager_rejects_public_and_invalid_channel_before_mutation(
+    tmp_path: Path,
+) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(SendPolicyError, match="Public"):
+            await manager.set_channel(0, "Public replacement", bytes.fromhex("ab" * 16))
+        with pytest.raises(ValueError, match="slot range"):
+            await manager.set_channel(2, "Out of range", bytes.fromhex("ab" * 16))
+    finally:
+        await manager.stop()
+
+    assert backend.channel_mutations == []
 
 
 async def test_manager_retries_after_connection_failure(tmp_path: Path) -> None:
@@ -696,6 +855,75 @@ async def test_meshcore_backend_submits_channel_message_without_fake_ack() -> No
     await backend.send_channel(3, "Fidget: private test", on_transmitted)
 
     assert transmitted
+
+
+async def test_meshcore_backend_upserts_contact_without_losing_route() -> None:
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.contact = None
+
+        async def add_contact(self, contact):
+            self.contact = dict(contact)
+            return Event(EventType.OK, {})
+
+    commands = FakeCommands()
+    key = "ab" * 32
+    client = SimpleNamespace(
+        commands=commands,
+        contacts={
+            key: {
+                "public_key": key,
+                "adv_name": "Old",
+                "type": 1,
+                "flags": 0,
+                "out_path_len": 2,
+                "out_path_hash_mode": 0,
+                "out_path": "0102",
+                "last_advert": 123,
+                "adv_lat": 47.0,
+                "adv_lon": -122.0,
+            }
+        },
+    )
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    await backend.upsert_contact(key, "Renamed", 1, 4)
+
+    assert commands.contact is not None
+    assert commands.contact["adv_name"] == "Renamed"
+    assert commands.contact["flags"] == 4
+    assert commands.contact["out_path_len"] == 2
+    assert commands.contact["out_path"] == "0102"
+    assert commands.contact["last_advert"] == 123
+
+
+async def test_meshcore_backend_renames_channel_with_existing_secret() -> None:
+    secret = bytes.fromhex("a5" * 16)
+
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.set_args = None
+
+        async def get_channel(self, channel_index: int):
+            assert channel_index == 1
+            return Event(
+                EventType.CHANNEL_INFO,
+                {"channel_name": "Old", "channel_secret": secret},
+            )
+
+        async def set_channel(self, channel_index: int, name: str, actual_secret: bytes):
+            self.set_args = (channel_index, name, actual_secret)
+            return Event(EventType.OK, {})
+
+    commands = FakeCommands()
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=commands),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+
+    await backend.rename_channel(1, "Renamed")
+
+    assert commands.set_args == (1, "Renamed", secret)
 
 
 async def test_meshcore_backend_requests_repeater_status_once() -> None:
