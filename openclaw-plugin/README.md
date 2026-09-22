@@ -81,9 +81,11 @@ compatibility boundary, not an invitation to fill every packet. The daemon's
 known-contact, learned-route, cooldown, and no-flood rules continue to apply.
 Before generation, native MeshCore turns receive a system-level RF reply
 contract and no optional tools. `Reply: X` and `Reply exactly: X` requests are
-handled deterministically. An oversized model draft gets at most one fresh, tool-free
-compression pass and is measured again; if it is still invalid, MeshPincer
-sends nothing rather than spending airtime on an error message.
+handled deterministically. An oversized model draft gets at most one fresh,
+tool-free compression pass and is measured again. If compression is unavailable
+or misses the target, MeshPincer sends an intact legal draft up to 160 bytes; a
+longer draft becomes one fixed, bounded request to narrow the question. It
+never silently suppresses a genuine user reply or raw-truncates its meaning.
 If a reply is transmitted but its ACK is uncertain, the native channel records
 that state locally and does not send a second explanatory message or auto-retry.
 Private-channel replies include the runtime node name (or the optional

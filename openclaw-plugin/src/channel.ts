@@ -15,6 +15,8 @@ const defaultConsumerId = "native-channel";
 const defaultPollIntervalMs = 1_000;
 export const meshCoreHardTextBytes = 160;
 export const meshCoreAgentTargetBytes = 75;
+export const meshCoreOverlongReplyNotice = "Answer too long; narrow the question.";
+export const meshCoreEmptyReplyNotice = "No answer generated; try again.";
 
 export const meshCoreAgentSystemPrompt = [
   "You are replying over MeshCore LoRa radio with scarce shared airtime.",
@@ -333,20 +335,9 @@ function utf8Bytes(text: string): number {
 
 export function singleRadioReply(text: string): string {
   const normalized = normalizedRadioText(text);
-  const encoder = new TextEncoder();
-  if (encoder.encode(normalized).length <= meshCoreHardTextBytes) return normalized;
-
-  const ellipsis = "…";
-  const budget = meshCoreHardTextBytes - encoder.encode(ellipsis).length;
-  let used = 0;
-  let truncated = "";
-  for (const codepoint of normalized) {
-    const bytes = encoder.encode(codepoint).length;
-    if (used + bytes > budget) break;
-    truncated += codepoint;
-    used += bytes;
-  }
-  return `${truncated}${ellipsis}`;
+  return utf8Bytes(normalized) <= meshCoreHardTextBytes
+    ? normalized
+    : meshCoreOverlongReplyNotice;
 }
 
 function isRestartRecoveryNotice(text: string): boolean {
@@ -396,11 +387,9 @@ function runtimeRadioReplyRepair(agentId: string): RadioReplyRepair {
         `Your entire output must be at most ${budgetBytes} UTF-8 bytes.`,
         "Output only the rewritten radio reply.",
       ].join(" "),
-      // Cloud-backed models can legitimately take longer than the SDK's
-      // 30-second default. Keep this bounded, but do not turn a routine short
-      // rewrite into a silent RF suppression merely because the provider was
-      // briefly slow.
-      timeoutMs: 90_000,
+      // Compression is optional, never a prerequisite for replying. Keep the
+      // isolated provider call brief; callers retain a deterministic fallback.
+      timeoutMs: 5_000,
     });
     return result.text;
   };
@@ -410,27 +399,36 @@ export async function constrainedRadioReply(
   text: string,
   options: {
     budgetBytes?: number;
+    hardLimitBytes?: number;
     repair?: RadioReplyRepair;
   } = {},
 ): Promise<string | undefined> {
   const budgetBytes = options.budgetBytes ?? meshCoreAgentTargetBytes;
+  const hardLimitBytes = options.hardLimitBytes ?? meshCoreHardTextBytes;
   const normalized = normalizedRadioText(text);
-  if (!normalized) return undefined;
+  if (!normalized) return meshCoreEmptyReplyNotice;
   if (isRestartRecoveryNotice(normalized)) return undefined;
 
-  const direct = nativeRadioReply(normalized);
-  if (direct && utf8Bytes(direct) <= budgetBytes) return direct;
+  const originalBytes = utf8Bytes(normalized);
+  if (originalBytes <= budgetBytes) return normalized;
 
   const repair = options.repair;
-  if (!repair) return undefined;
-  let repaired: string;
-  try {
-    repaired = normalizedRadioText(await repair(normalized, budgetBytes));
-  } catch {
-    return undefined;
+  if (repair) {
+    try {
+      const repaired = normalizedRadioText(await repair(normalized, budgetBytes));
+      const repairedBytes = utf8Bytes(repaired);
+      if (repaired && repairedBytes <= budgetBytes) return repaired;
+      if (originalBytes > hardLimitBytes && repaired && repairedBytes <= hardLimitBytes) {
+        return repaired;
+      }
+    } catch {
+      // Compression is an airtime optimization. Provider failure must not
+      // turn a legal reply into silence.
+    }
   }
-  if (!repaired || utf8Bytes(repaired) > budgetBytes) return undefined;
-  return repaired;
+
+  if (originalBytes <= hardLimitBytes) return normalized;
+  return meshCoreOverlongReplyNotice;
 }
 
 function escapeRegex(text: string): string {
@@ -458,11 +456,20 @@ export async function privateChannelRadioReply(
 ): Promise<string | undefined> {
   const prefix = `${label.trim()}: `;
   const bodyBudget = meshCoreAgentTargetBytes - utf8Bytes(prefix);
-  if (bodyBudget <= 0) return undefined;
-  const response = await constrainedRadioReply(text, { budgetBytes: bodyBudget, repair });
+  const bodyHardLimit = meshCoreHardTextBytes - utf8Bytes(prefix);
+  if (bodyHardLimit <= 0) return meshCoreOverlongReplyNotice;
+  const response = await constrainedRadioReply(text, {
+    budgetBytes: Math.max(0, bodyBudget),
+    hardLimitBytes: bodyHardLimit,
+    repair,
+  });
   if (!response) return undefined;
   const combined = `${prefix}${response}`;
-  return utf8Bytes(combined) <= meshCoreAgentTargetBytes ? combined : undefined;
+  if (utf8Bytes(combined) <= meshCoreHardTextBytes) return combined;
+  const fallback = `${prefix}${meshCoreOverlongReplyNotice}`;
+  return utf8Bytes(fallback) <= meshCoreHardTextBytes
+    ? fallback
+    : meshCoreOverlongReplyNotice;
 }
 
 export function acceptsDirectDeliveryState(
@@ -683,13 +690,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
               const label = ctx.account.channelSenderLabel ?? selfName;
               const exact = exactReplyRequest(body);
               if (exact) {
-                const response = await privateChannelRadioReply(label, exact, async () => "");
-                if (!response) {
-                  ctx.log?.warn?.(
-                    `meshcore suppressed exact group reply for event ${event.id}: exceeds RF budget`,
-                  );
-                  return;
-                }
+                const response = singleRadioReply(`${label}: ${exact}`);
                 await sendChannel(client, channelIndex, response);
                 return;
               }
@@ -779,7 +780,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
                     );
                     if (!response) {
                       ctx.log?.warn?.(
-                        `meshcore suppressed invalid group reply for event ${event.id}`,
+                        `meshcore kept local-only group transport output for event ${event.id}`,
                       );
                       return { visibleReplySent: false };
                     }
@@ -807,13 +808,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
             const peerPrefix = peerKey.slice(0, 12);
             const exact = exactReplyRequest(text);
             if (exact) {
-              const response = nativeRadioReply(exact);
-              if (!response) {
-                ctx.log?.warn?.(
-                  `meshcore suppressed exact direct reply for event ${event.id}: exceeds RF budget`,
-                );
-                return;
-              }
+              const response = singleRadioReply(exact);
               const result = await sendDirect(client, peerKey, response, false);
               if (result.deliveryState === "timed_out") {
                 ctx.log?.warn?.(
@@ -891,7 +886,7 @@ export const meshcoreChannelPlugin = createChatChannelPlugin<ResolvedMeshCoreAcc
                   });
                   if (!response) {
                     ctx.log?.warn?.(
-                      `meshcore suppressed invalid direct reply for event ${event.id}`,
+                      `meshcore kept local-only direct transport output for event ${event.id}`,
                     );
                     return { visibleReplySent: false };
                   }

@@ -6,7 +6,9 @@ import {
   meshCoreAgentGuidance,
   meshCoreAgentSystemPrompt,
   meshCoreAgentTargetBytes,
+  meshCoreEmptyReplyNotice,
   meshCoreHardTextBytes,
+  meshCoreOverlongReplyNotice,
   MeshCoreEventPump,
   meshCorePromptPolicy,
   nativeRadioReply,
@@ -64,11 +66,10 @@ describe("MeshCore native channel", () => {
     expect(meshCorePromptPolicy({ channel: "telegram" })).toBeUndefined();
   });
 
-  it("enforces the hard limit in UTF-8 bytes without splitting code points", () => {
+  it("replaces an over-limit payload with a bounded useful notice", () => {
     const reply = singleRadioReply("🙂".repeat(60));
     expect(new TextEncoder().encode(reply).length).toBeLessThanOrEqual(160);
-    expect(reply.endsWith("…")).toBe(true);
-    expect(reply).not.toContain("�");
+    expect(reply).toBe(meshCoreOverlongReplyNotice);
   });
 
   it("enforces the 75-byte native reply budget in code", () => {
@@ -89,7 +90,32 @@ describe("MeshCore native channel", () => {
       constrainedRadioReply("x".repeat(76), {
         repair: async () => "🙂".repeat(19),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("x".repeat(76));
+  });
+
+  it("never suppresses a genuine oversized reply", async () => {
+    await expect(constrainedRadioReply("")).resolves.toBe(meshCoreEmptyReplyNotice);
+
+    await expect(
+      constrainedRadioReply("x".repeat(84), {
+        repair: async () => {
+          throw new Error("isolated completion unavailable");
+        },
+      }),
+    ).resolves.toBe("x".repeat(84));
+
+    await expect(
+      constrainedRadioReply("x".repeat(161), {
+        repair: async () => "y".repeat(161),
+      }),
+    ).resolves.toBe(meshCoreOverlongReplyNotice);
+
+    const legalRepair = "Useful answer under the firmware ceiling. ".repeat(2).trim();
+    await expect(
+      constrainedRadioReply("x".repeat(161), {
+        repair: async () => legalRepair,
+      }),
+    ).resolves.toBe(legalRepair);
   });
 
   it("bypasses generation for exact-reply requests", () => {
@@ -98,6 +124,8 @@ describe("MeshCore native channel", () => {
     expect(exactReplyRequest("Reply: OK")).toBe("OK");
     expect(exactReplyRequest(" reply:   MeshPincer OK  ")).toBe("MeshPincer OK");
     expect(exactReplyRequest("reply ok")).toBeUndefined();
+    expect(singleRadioReply("x".repeat(84))).toBe("x".repeat(84));
+    expect(singleRadioReply("x".repeat(161))).toBe(meshCoreOverlongReplyNotice);
   });
 
   it("suppresses OpenClaw restart-recovery commentary on RF", () => {
@@ -162,10 +190,10 @@ describe("MeshCore native channel", () => {
     );
   });
 
-  it("suppresses a private-channel reply when its single repair still exceeds budget", async () => {
+  it("falls back to an intact legal private-channel reply when repair misses the target", async () => {
     await expect(
       privateChannelRadioReply("Fidget", "x".repeat(75), async () => "y".repeat(75)),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(`Fidget: ${"x".repeat(75)}`);
   });
 
   it("baselines a new consumer at the current event head", async () => {

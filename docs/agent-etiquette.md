@@ -20,9 +20,11 @@ than a LoRa network can carry it, so a good agent is intentionally quiet.
    whenever the answer remains useful. Native agent output must enforce that
    budget in code, including errors and recovery paths. Give the model the
    constraint before generation, validate encoded bytes afterward, and allow at
-   most one local compression pass. If output is still invalid, transmit
-   nothing; do not spend airtime on a meta-error. Local delivery diagnostics
-   must not be sent over RF. MeshCore's current text ceiling is 160
+   most one local compression pass. Compression is an optimization, not a
+   prerequisite: if it is unavailable, send an intact legal draft up to the
+   firmware ceiling. A longer draft must become one fixed, short request to
+   narrow the question, never silence or raw truncation. Local delivery
+   diagnostics must not be sent over RF. MeshCore's current text ceiling is 160
    UTF-8 bytes; that is a protocol limit, not a writing target. The 75-byte DM
    target plus MeshCore's five bytes of text metadata fits exactly five AES
    blocks. At 76 bytes, encryption needs a sixth block. Group messages must
@@ -65,7 +67,7 @@ Before unattended transmit is enabled, MeshPincer must provide:
 - duplicate suppression, concise output limits, and backpressure;
 - a default agent target of 75 UTF-8 bytes and a hard 160-byte text limit,
   enforced by encoded byte length rather than character count, with one local
-  repair attempt and fail-closed suppression;
+  repair attempt, intact legal fallback, and a fixed bounded over-limit reply;
 - passive-by-default diagnostics and disabled automatic startup adverts;
 - public-key-based authorization for RF callers and authenticated local access;
 - typed, validated administration operations with auditable outcomes;

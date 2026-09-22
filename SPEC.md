@@ -159,8 +159,10 @@ The transmit path must implement the project policy in
   optional-tool surface. `Reply: X` and `Reply exactly: X` requests bypass
   free-form generation. An
   oversized draft gets at most one fresh, tool-free compression pass and is
-  measured again; invalid output is suppressed rather than replaced by more RF
-  traffic. Transport-recovery notices stay off RF, and delivery uncertainty
+  measured again. Compression failure falls back to the intact draft when it
+  fits the 160-byte ceiling; longer output becomes one fixed, bounded request
+  to narrow the question. Genuine user replies are never silently suppressed
+  or raw-truncated. Transport-recovery notices stay off RF, and delivery uncertainty
   never triggers explanatory traffic or an automatic resend.
 - Cross-network forwarding always has an explicit destination and does not
   mirror private content or precise coordinates by default.
