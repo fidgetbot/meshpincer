@@ -160,5 +160,11 @@ its channel hash. A fresh periodic hardware-statistics snapshot still reported
 neither operation emitted RF traffic. Audit events recorded the operation and
 sanitized outcome without storing the private channel secret.
 
+The companion's contact-retention setting was later brought under the same
+daemon-owned mutation path. MeshPincer reads the complete auto-add bitmask,
+changes only the `overwrite oldest non-favorite when full` bit, and verifies
+the full read-back so other auto-add type and hop-limit settings cannot be
+silently reset.
+
 Device serial numbers, precise coordinates, channel secrets, BLE credentials,
 and full public keys are intentionally excluded from this public record.

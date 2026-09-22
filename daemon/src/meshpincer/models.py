@@ -84,6 +84,16 @@ class UpsertContactRequest(BaseModel):
         return value
 
 
+class AutoAddConfig(BaseModel):
+    config: int = Field(ge=0, le=255)
+    max_hops: int | None = Field(default=None, ge=0, le=64)
+    overwrite_oldest_non_favorite: bool
+
+
+class UpdateAutoAddConfigRequest(BaseModel):
+    overwrite_oldest_non_favorite: bool
+
+
 class ChannelRecord(BaseModel):
     index: int = Field(ge=0)
     name: str

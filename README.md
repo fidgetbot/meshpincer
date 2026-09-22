@@ -143,6 +143,12 @@ administrative APIs on the Unix socket, not general-purpose OpenClaw agent
 tools. Channel secrets are accepted only for a set operation and are never
 returned, logged, or written to the SQLite event payloads.
 
+The same local API can read and toggle the companion firmware's
+"overwrite oldest non-favorite when full" contact-retention bit. MeshPincer
+preserves the device's existing auto-add type mask and hop limit, verifies the
+new setting by immediate read-back, and leaves favorited contacts ineligible
+for automatic eviction.
+
 ## Project status
 
 Early development. The first hardware-backed, agent-operated MVP is being built

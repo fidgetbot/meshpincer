@@ -6,6 +6,7 @@ import pytest
 from meshpincer.app import create_app
 from meshpincer.config import Settings
 from meshpincer.models import (
+    AutoAddConfig,
     ChannelRecord,
     ContactRecord,
     InboundMessage,
@@ -26,6 +27,11 @@ class FakeRadioManager:
             ChannelRecord(index=0, name="Public", configured=True, channel_hash="11"),
             ChannelRecord(index=1, name="", configured=False, channel_hash="37"),
         ]
+        self.autoadd = AutoAddConfig(
+            config=0x06,
+            max_hops=4,
+            overwrite_oldest_non_favorite=False,
+        )
 
     async def start(self) -> None:
         self.started = True
@@ -38,6 +44,19 @@ class FakeRadioManager:
 
     async def contacts(self) -> list[ContactRecord]:
         return list(self.contact_records.values())
+
+    async def autoadd_config(self) -> AutoAddConfig:
+        return self.autoadd
+
+    async def set_overwrite_oldest_non_favorite(self, enabled: bool) -> AutoAddConfig:
+        config = self.autoadd.config | 0x01 if enabled else self.autoadd.config & ~0x01
+        self.autoadd = self.autoadd.model_copy(
+            update={
+                "config": config,
+                "overwrite_oldest_non_favorite": enabled,
+            }
+        )
+        return self.autoadd
 
     async def upsert_contact(
         self,
@@ -193,6 +212,38 @@ async def test_contacts_and_channels_come_from_radio_manager(settings: Settings)
         {"index": 0, "name": "Public", "configured": True, "channel_hash": "11"}
     ]
     assert len(all_channels.json()) == 2
+
+
+@pytest.mark.asyncio
+async def test_autoadd_management_preserves_other_bits_and_records_audit_events(
+    settings: Settings,
+) -> None:
+    radio = FakeRadioManager()
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            before = await client.get("/v1/device/autoadd")
+            updated = await client.patch(
+                "/v1/device/autoadd",
+                json={"overwrite_oldest_non_favorite": True},
+            )
+            events = await client.get("/v1/events")
+
+    assert before.json() == {
+        "config": 0x06,
+        "max_hops": 4,
+        "overwrite_oldest_non_favorite": False,
+    }
+    assert updated.json() == {
+        "config": 0x07,
+        "max_hops": 4,
+        "overwrite_oldest_non_favorite": True,
+    }
+    assert [event["kind"] for event in events.json()] == [
+        "device.autoadd.update.requested",
+        "device.autoadd.update.succeeded",
+    ]
 
 
 @pytest.mark.asyncio

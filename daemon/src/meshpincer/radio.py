@@ -13,6 +13,7 @@ from meshcore.events import EventType
 from .config import Settings
 from .discovery import SerialDevice, discover_serial_device
 from .models import (
+    AutoAddConfig,
     ChannelRecord,
     ContactRecord,
     InboundMessage,
@@ -32,6 +33,10 @@ class RadioBackend(Protocol):
     async def read_contacts(self) -> Sequence[Mapping[str, Any]]: ...
 
     async def read_channels(self, count: int) -> Sequence[Mapping[str, Any]]: ...
+
+    async def read_autoadd_config(self) -> Mapping[str, Any]: ...
+
+    async def set_autoadd_config(self, config: int) -> None: ...
 
     async def upsert_contact(
         self,
@@ -174,6 +179,18 @@ class MeshCoreBackend:
                 }
             )
         return channels
+
+    async def read_autoadd_config(self) -> Mapping[str, Any]:
+        return _event_payload(
+            await self.client.commands.get_autoadd_config(),
+            "auto-add configuration",
+        )
+
+    async def set_autoadd_config(self, config: int) -> None:
+        _event_payload(
+            await self.client.commands.set_autoadd_config(config),
+            "auto-add configuration update",
+        )
 
     async def upsert_contact(
         self,
@@ -448,6 +465,23 @@ class RadioManager:
                 else [item for item in self._channels if item.configured]
             )
             return [channel.model_copy(deep=True) for channel in channels]
+
+    async def autoadd_config(self) -> AutoAddConfig:
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            return self._autoadd_record(await backend.read_autoadd_config())
+
+    async def set_overwrite_oldest_non_favorite(self, enabled: bool) -> AutoAddConfig:
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            current = self._autoadd_record(await backend.read_autoadd_config())
+            updated = current.config | 0x01 if enabled else current.config & ~0x01
+            if updated != current.config:
+                await backend.set_autoadd_config(updated)
+            readback = self._autoadd_record(await backend.read_autoadd_config())
+            if readback.overwrite_oldest_non_favorite != enabled:
+                raise ConnectionError("auto-add configuration did not read back from the radio")
+            return readback
 
     async def upsert_contact(
         self,
@@ -787,6 +821,16 @@ class RadioManager:
             )
             for contact in contacts
         ]
+
+    @staticmethod
+    def _autoadd_record(payload: Mapping[str, Any]) -> AutoAddConfig:
+        config = int(payload.get("config", 0))
+        max_hops_value = payload.get("max_hops")
+        return AutoAddConfig(
+            config=config,
+            max_hops=int(max_hops_value) if max_hops_value is not None else None,
+            overwrite_oldest_non_favorite=bool(config & 0x01),
+        )
 
     @staticmethod
     def _channel_records(channels: Sequence[Mapping[str, Any]]) -> list[ChannelRecord]:

@@ -63,6 +63,8 @@ Initial endpoints:
 
 - `GET /v1/status`
 - `GET /v1/contacts`
+- `GET /v1/device/autoadd`
+- `PATCH /v1/device/autoadd`
 - `PUT /v1/contacts/{public_key}`
 - `DELETE /v1/contacts/{public_key}`
 - `GET /v1/channels?include_empty=<bool>`
@@ -82,9 +84,12 @@ Initial endpoints:
 The API is local-only. It must not bind a TCP listener by default.
 
 The daemon remains the sole serial-port owner for device mutations. It
-serializes contact and channel changes with receive/send operations, refreshes
-its cache from the companion immediately afterward, and returns only verified
-read-back state. Contact deletion rejects unknown keys. Channel mutations
+serializes contact, contact-retention, and channel changes with receive/send
+operations, refreshes state from the companion immediately afterward, and
+returns only verified read-back state. The retention endpoint changes only the
+firmware bit that permits replacing the oldest non-favorite contact when the
+table is full, preserving all auto-add type bits and hop limits. Contact
+deletion rejects unknown keys. Channel mutations
 reject slot 0 (`Public`) and indices outside the device-reported slot range.
 Private-channel secrets are accepted only by the set request and never appear
 in responses or audit events. These administrative endpoints are not exposed

@@ -8,6 +8,7 @@ from . import __version__
 from .config import Settings
 from .models import (
     AdvanceCursorRequest,
+    AutoAddConfig,
     ChannelRecord,
     ConsumerCursor,
     ContactRecord,
@@ -21,6 +22,7 @@ from .models import (
     SendMessageResult,
     ServiceStatus,
     SetChannelRequest,
+    UpdateAutoAddConfigRequest,
     UpsertContactRequest,
 )
 from .radio import RadioManager, SendPolicyError
@@ -58,6 +60,35 @@ def create_app(
     @app.get("/v1/contacts", response_model=list[ContactRecord])
     async def contacts() -> list[ContactRecord]:
         return await radio.contacts()
+
+    @app.get("/v1/device/autoadd", response_model=AutoAddConfig)
+    async def autoadd_config() -> AutoAddConfig:
+        try:
+            return await radio.autoadd_config()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.patch("/v1/device/autoadd", response_model=AutoAddConfig)
+    async def update_autoadd_config(request: UpdateAutoAddConfigRequest) -> AutoAddConfig:
+        await store.append_event(
+            "device.autoadd.update.requested",
+            {"overwrite_oldest_non_favorite": request.overwrite_oldest_non_favorite},
+        )
+        try:
+            result = await radio.set_overwrite_oldest_non_favorite(
+                request.overwrite_oldest_non_favorite
+            )
+        except Exception as exc:
+            await store.append_event(
+                "device.autoadd.update.failed",
+                {"reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event(
+            "device.autoadd.update.succeeded",
+            result.model_dump(mode="json"),
+        )
+        return result
 
     @app.put("/v1/contacts/{public_key}", response_model=ContactRecord)
     async def upsert_contact(

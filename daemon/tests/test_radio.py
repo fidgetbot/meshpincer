@@ -40,6 +40,9 @@ class FakeBackend:
         }
         self.contact_mutations: list[tuple[str, str]] = []
         self.channel_mutations: list[tuple[str, int, str]] = []
+        self.autoadd_config = 0x06
+        self.autoadd_max_hops = 4
+        self.autoadd_mutations: list[int] = []
 
     async def read_status(self) -> tuple[dict[str, Any], int]:
         return (
@@ -100,6 +103,13 @@ class FakeBackend:
                 "configured": self.channel_one_configured,
             },
         ]
+
+    async def read_autoadd_config(self) -> dict[str, int]:
+        return {"config": self.autoadd_config, "max_hops": self.autoadd_max_hops}
+
+    async def set_autoadd_config(self, config: int) -> None:
+        self.autoadd_config = config
+        self.autoadd_mutations.append(config)
 
     async def upsert_contact(
         self,
@@ -329,6 +339,44 @@ async def test_manager_mutates_private_channel_without_reconnecting(tmp_path: Pa
         ("rename", 1, "Renamed"),
         ("clear", 1, ""),
     ]
+
+
+async def test_manager_enables_oldest_non_favorite_overwrite_without_reconnecting(
+    tmp_path: Path,
+) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        radio_task = manager._task
+        before = await manager.autoadd_config()
+        updated = await manager.set_overwrite_oldest_non_favorite(True)
+
+        assert manager._task is radio_task
+        assert not backend.disconnected
+    finally:
+        await manager.stop()
+
+    assert before.config == 0x06
+    assert before.overwrite_oldest_non_favorite is False
+    assert updated.config == 0x07
+    assert updated.max_hops == 4
+    assert updated.overwrite_oldest_non_favorite is True
+    assert backend.autoadd_mutations == [0x07]
 
 
 async def test_manager_rejects_public_and_invalid_channel_before_mutation(
@@ -896,6 +944,29 @@ async def test_meshcore_backend_upserts_contact_without_losing_route() -> None:
     assert commands.contact["out_path_len"] == 2
     assert commands.contact["out_path"] == "0102"
     assert commands.contact["last_advert"] == 123
+
+
+async def test_meshcore_backend_reads_and_sets_autoadd_config() -> None:
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.updated: int | None = None
+
+        async def get_autoadd_config(self):
+            return Event(EventType.AUTOADD_CONFIG, {"config": 0x06, "max_hops": 4})
+
+        async def set_autoadd_config(self, config: int):
+            self.updated = config
+            return Event(EventType.OK, {})
+
+    commands = FakeCommands()
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=commands),  # type: ignore[arg-type]
+        timeout=5.0,
+    )
+
+    assert await backend.read_autoadd_config() == {"config": 0x06, "max_hops": 4}
+    await backend.set_autoadd_config(0x07)
+    assert commands.updated == 0x07
 
 
 async def test_meshcore_backend_renames_channel_with_existing_secret() -> None:
