@@ -512,14 +512,14 @@ async def test_meshcore_backend_normalizes_direct_and_channel_events() -> None:
     ]
 
 
-async def test_manager_allows_one_zero_hop_direct_send(tmp_path: Path) -> None:
+async def test_manager_allows_one_learned_multihop_direct_send(tmp_path: Path) -> None:
     config = Settings(
         state_dir=tmp_path,
         socket_path=tmp_path / "meshpincer.sock",
         refresh_interval_seconds=60,
     )
     backend = FakeBackend()
-    backend.contact_path_length = 0
+    backend.contact_path_length = 12
 
     async def connector(_port: str, _timeout: float) -> FakeBackend:
         return backend
@@ -550,13 +550,14 @@ async def test_manager_allows_one_zero_hop_direct_send(tmp_path: Path) -> None:
     assert outcome.acknowledged
 
 
-async def test_manager_rejects_non_direct_route_before_transmit(tmp_path: Path) -> None:
+async def test_manager_rejects_unknown_route_before_transmit(tmp_path: Path) -> None:
     config = Settings(
         state_dir=tmp_path,
         socket_path=tmp_path / "meshpincer.sock",
         refresh_interval_seconds=60,
     )
     backend = FakeBackend()
+    backend.contact_path_length = -1
 
     async def connector(_port: str, _timeout: float) -> FakeBackend:
         return backend
@@ -569,7 +570,7 @@ async def test_manager_rejects_non_direct_route_before_transmit(tmp_path: Path) 
     await manager.start()
     try:
         await wait_until_connected(manager)
-        with pytest.raises(ValueError, match="zero-hop"):
+        with pytest.raises(ValueError, match="learned route"):
             await manager.send_direct(
                 "34" * 32,
                 "must not transmit",

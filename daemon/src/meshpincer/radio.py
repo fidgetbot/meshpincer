@@ -537,8 +537,8 @@ class RadioManager:
                 raise ConnectionError("MeshCore radio is not connected")
             if contact is None:
                 raise ValueError("direct-message recipient is not a known contact")
-            if contact.path_length != 0:
-                raise ValueError("direct-only send requires a learned zero-hop route")
+            if contact.path_length is None or contact.path_length < 0:
+                raise ValueError("direct-only send requires a learned route")
             now = asyncio.get_running_loop().time()
             global_remaining = (
                 self._last_direct_send + self.settings.direct_global_cooldown_seconds - now

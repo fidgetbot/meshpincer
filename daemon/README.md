@@ -55,8 +55,8 @@ for consumers such as operator tools and the native MeshCore channel. Consumers
 advance their cursor after processing, so unacknowledged events replay after a
 restart.
 
-Direct sends require a known contact with a zero-hop route, accept at most 160
-characters, and perform one transmission with no retry or flood fallback. The
+Direct sends require a known contact with a learned route, accept at most 160
+UTF-8 bytes, and perform one transmission with no retry or flood fallback. The
 daemon persists `queued`, `transmitted`, and `acknowledged` or `timed_out`
 delivery events, correlates the companion's expected ACK code, serializes
 radio operations, and enforces global and per-peer cooldowns before

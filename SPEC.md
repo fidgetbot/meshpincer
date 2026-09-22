@@ -114,9 +114,9 @@ only after successful processing. Cursor movement is monotonic, yielding
 at-least-once delivery without allowing a consumer to skip beyond the newest
 recorded event.
 
-The initial direct-send path is deliberately narrow: a known full public key,
-a learned zero-hop route, at most 160 UTF-8 bytes, one transmission, no flood
-fallback, and global plus per-peer cooldowns. It atomically records queued,
+The direct-send path is deliberately narrow: a known full public key, a learned
+direct route of any valid hop count, at most 160 UTF-8 bytes, one transmission,
+no flood fallback, and global plus per-peer cooldowns. It atomically records queued,
 transmitted, and acknowledged or timed-out delivery events and correlates the
 four-byte ACK code returned by the companion protocol.
 

@@ -56,7 +56,7 @@ Replies use the fewest words that answer the request and target at most 75
 UTF-8 bytes. The current MeshCore firmware ceiling is 160 UTF-8 bytes, which
 MeshPincer enforces without splitting multi-byte characters. That ceiling is a
 compatibility boundary, not an invitation to fill every packet. The daemon's
-known-contact, zero-hop route, cooldown, and no-flood rules continue to apply.
+known-contact, learned-route, cooldown, and no-flood rules continue to apply.
 If a reply is transmitted but its ACK is uncertain, the native channel records
 that state locally and does not send a second explanatory message or auto-retry.
 Private-channel replies include the runtime node name (or the optional
