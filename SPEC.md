@@ -156,8 +156,8 @@ The transmit path must implement the project policy in
 - Native agent replies target at most 75 UTF-8 bytes and use fewer when useful;
   160 UTF-8 bytes is a hard firmware ceiling. Limits are measured after UTF-8
   encoding. MeshCore turns receive a system-level RF reply contract and an empty
-  optional-tool surface. `Reply: X` and `Reply exactly: X` requests bypass
-  free-form generation. An
+  optional-tool surface. `Reply X`, `Reply: X`, `Reply exactly X`, and
+  `Reply exactly: X` requests bypass free-form generation. An
   oversized draft gets at most one fresh, tool-free compression pass and is
   measured again. Compression failure falls back to the intact draft when it
   fits the 160-byte ceiling; longer output becomes one fixed, bounded request

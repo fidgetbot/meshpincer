@@ -24,7 +24,7 @@ export const meshCoreAgentSystemPrompt = [
   "MeshCore is a low-bandwidth LoRa surface.",
   `Use the fewest words that fully answer and aim for at most ${meshCoreAgentTargetBytes} UTF-8 bytes; ${meshCoreHardTextBytes} bytes is a hard protocol ceiling, not a target.`,
   "Send one plain-text sentence with no Markdown, preamble, restatement, or sign-off.",
-  "If the user writes 'Reply: X' or requests exact text, send only X.",
+  "Commands 'Reply X', 'Reply: X', 'Reply exactly X', and 'Reply exactly: X' send only X.",
   "Never send delivery, retry, missing-ACK, or automatic-resend commentary over RF; delivery uncertainty is recorded locally.",
 ].join(" ");
 
@@ -362,10 +362,18 @@ export function nativeRadioReply(text: string): string | undefined {
 }
 
 export function exactReplyRequest(text: string): string | undefined {
-  const match = /^\s*reply(?:\s+exactly)?\s*:\s*(.*?)\s*$/is.exec(text);
-  if (!match) return undefined;
-  const exact = normalizedRadioText(match[1] ?? "");
-  return exact || undefined;
+  const trimmed = text.trim();
+  const exactMatch = /^reply\s+exactly(?:\s*:\s*|\s+)(.*)$/is.exec(trimmed);
+  if (exactMatch) {
+    const exact = normalizedRadioText(exactMatch[1] ?? "");
+    return exact || undefined;
+  }
+  if (/^reply\s+exactly\s*:?\s*$/i.test(trimmed)) return undefined;
+
+  const replyMatch = /^reply(?:\s*:\s*|\s+)(.*)$/is.exec(trimmed);
+  if (!replyMatch) return undefined;
+  const reply = normalizedRadioText(replyMatch[1] ?? "");
+  return reply || undefined;
 }
 
 export type RadioReplyRepair = (draft: string, budgetBytes: number) => Promise<string>;

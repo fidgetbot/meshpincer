@@ -123,7 +123,14 @@ describe("MeshCore native channel", () => {
     expect(exactReplyRequest(" reply exactly:   OK  ")).toBe("OK");
     expect(exactReplyRequest("Reply: OK")).toBe("OK");
     expect(exactReplyRequest(" reply:   MeshPincer OK  ")).toBe("MeshPincer OK");
-    expect(exactReplyRequest("reply ok")).toBeUndefined();
+    expect(exactReplyRequest("Reply OK")).toBe("OK");
+    expect(exactReplyRequest(" reply   MeshPincer OK  ")).toBe("MeshPincer OK");
+    expect(exactReplyRequest("Reply exactly MeshPincer OK")).toBe("MeshPincer OK");
+    expect(exactReplyRequest("Reply")).toBeUndefined();
+    expect(exactReplyRequest("Reply:")).toBeUndefined();
+    expect(exactReplyRequest("Reply exactly")).toBeUndefined();
+    expect(exactReplyRequest("Reply exactly:")).toBeUndefined();
+    expect(exactReplyRequest("Please reply OK")).toBeUndefined();
     expect(singleRadioReply("x".repeat(84))).toBe("x".repeat(84));
     expect(singleRadioReply("x".repeat(161))).toBe(meshCoreOverlongReplyNotice);
   });

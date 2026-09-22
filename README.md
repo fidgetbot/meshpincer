@@ -114,8 +114,9 @@ subject to its route, length, and cooldown safeguards.
 Native replies aim for at most 75 UTF-8 bytes and use fewer whenever possible.
 The firmware's 160-byte text maximum is enforced as a hard encoded-byte limit,
 not treated as a normal response length. MeshCore turns receive a system-level
-RF writing contract and no optional tools. `Reply: X` and `Reply exactly: X`
-requests are handled deterministically. An oversized draft gets at most one
+RF writing contract and no optional tools. `Reply X`, `Reply: X`,
+`Reply exactly X`, and `Reply exactly: X` requests are handled
+deterministically. An oversized draft gets at most one
 fresh, tool-free local compression pass and is measured again. If compression
 is unavailable or misses the 75-byte target, a legal draft up to 160 bytes is
 sent intact; a longer draft becomes one fixed, bounded request to narrow the
