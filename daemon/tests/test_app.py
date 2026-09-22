@@ -21,9 +21,7 @@ class FakeRadioManager:
         self.started = False
         self.contact_mutations: list[tuple[str, str]] = []
         self.channel_mutations: list[tuple[str, int, str]] = []
-        self.contact_records = {
-            "ab" * 32: ContactRecord(public_key="ab" * 32, name="Test peer")
-        }
+        self.contact_records = {"ab" * 32: ContactRecord(public_key="ab" * 32, name="Test peer")}
         self.channel_records = [
             ChannelRecord(index=0, name="Public", configured=True, channel_hash="11"),
             ChannelRecord(index=1, name="", configured=False, channel_hash="37"),

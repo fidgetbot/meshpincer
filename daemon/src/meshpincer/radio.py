@@ -477,9 +477,7 @@ class RadioManager:
         async with self._operation_lock:
             backend = await self._connected_backend()
             async with self._lock:
-                exists = any(
-                    item.public_key.lower() == normalized_key for item in self._contacts
-                )
+                exists = any(item.public_key.lower() == normalized_key for item in self._contacts)
             if not exists:
                 raise ValueError("contact is not known to the companion radio")
             await backend.remove_contact(normalized_key)
