@@ -80,8 +80,8 @@ MeshPincer enforces without splitting multi-byte characters. That ceiling is a
 compatibility boundary, not an invitation to fill every packet. The daemon's
 known-contact, learned-route, cooldown, and no-flood rules continue to apply.
 Before generation, native MeshCore turns receive a system-level RF reply
-contract and no optional tools. `reply exactly:` requests are handled
-deterministically. An oversized model draft gets at most one fresh, tool-free
+contract and no optional tools. `Reply: X` and `Reply exactly: X` requests are
+handled deterministically. An oversized model draft gets at most one fresh, tool-free
 compression pass and is measured again; if it is still invalid, MeshPincer
 sends nothing rather than spending airtime on an error message.
 If a reply is transmitted but its ACK is uncertain, the native channel records

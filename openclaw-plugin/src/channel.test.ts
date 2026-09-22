@@ -95,6 +95,8 @@ describe("MeshCore native channel", () => {
   it("bypasses generation for exact-reply requests", () => {
     expect(exactReplyRequest("Reply exactly: MeshPincer OK")).toBe("MeshPincer OK");
     expect(exactReplyRequest(" reply exactly:   OK  ")).toBe("OK");
+    expect(exactReplyRequest("Reply: OK")).toBe("OK");
+    expect(exactReplyRequest(" reply:   MeshPincer OK  ")).toBe("MeshPincer OK");
     expect(exactReplyRequest("reply ok")).toBeUndefined();
   });
 

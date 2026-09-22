@@ -22,7 +22,7 @@ export const meshCoreAgentSystemPrompt = [
   "MeshCore is a low-bandwidth LoRa surface.",
   `Use the fewest words that fully answer and aim for at most ${meshCoreAgentTargetBytes} UTF-8 bytes; ${meshCoreHardTextBytes} bytes is a hard protocol ceiling, not a target.`,
   "Send one plain-text sentence with no Markdown, preamble, restatement, or sign-off.",
-  "If the user requests exact text, send only that text.",
+  "If the user writes 'Reply: X' or requests exact text, send only X.",
   "Never send delivery, retry, missing-ACK, or automatic-resend commentary over RF; delivery uncertainty is recorded locally.",
 ].join(" ");
 
@@ -371,7 +371,7 @@ export function nativeRadioReply(text: string): string | undefined {
 }
 
 export function exactReplyRequest(text: string): string | undefined {
-  const match = /^\s*reply\s+exactly\s*:\s*(.*?)\s*$/is.exec(text);
+  const match = /^\s*reply(?:\s+exactly)?\s*:\s*(.*?)\s*$/is.exec(text);
   if (!match) return undefined;
   const exact = normalizedRadioText(match[1] ?? "");
   return exact || undefined;
@@ -396,7 +396,11 @@ function runtimeRadioReplyRepair(agentId: string): RadioReplyRepair {
         `Your entire output must be at most ${budgetBytes} UTF-8 bytes.`,
         "Output only the rewritten radio reply.",
       ].join(" "),
-      timeoutMs: 30_000,
+      // Cloud-backed models can legitimately take longer than the SDK's
+      // 30-second default. Keep this bounded, but do not turn a routine short
+      // rewrite into a silent RF suppression merely because the provider was
+      // briefly slow.
+      timeoutMs: 90_000,
     });
     return result.text;
   };
