@@ -260,11 +260,16 @@ class MeshCoreBackend:
         if contact is None:
             raise ValueError("contact is not known to the companion radio")
         if mode is ContactRouteMode.ZERO_HOP:
+            current_hash_mode = int(contact.get("out_path_hash_mode", -1))
+            # Flood contacts are decoded with hash mode -1. Passing that value
+            # to meshcore_py makes its path-size calculation divide by zero.
+            # Let the library query the device's configured hash mode instead.
+            path_hash_mode = current_hash_mode if current_hash_mode >= 0 else None
             _event_payload(
                 await self.client.commands.change_contact_path(
                     contact,
                     "",
-                    path_hash_mode=int(contact.get("out_path_hash_mode", 0)),
+                    path_hash_mode=path_hash_mode,
                 ),
                 "contact route update",
             )

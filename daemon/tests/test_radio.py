@@ -1024,7 +1024,7 @@ async def test_meshcore_backend_sets_zero_hop_and_resets_flood_route() -> None:
                 "type": 2,
                 "flags": 1,
                 "out_path_len": -1,
-                "out_path_hash_mode": 0,
+                "out_path_hash_mode": -1,
                 "out_path": "",
                 "last_advert": 123,
             }
@@ -1035,7 +1035,7 @@ async def test_meshcore_backend_sets_zero_hop_and_resets_flood_route() -> None:
     await backend.set_contact_route(key, ContactRouteMode.ZERO_HOP)
     await backend.set_contact_route(key, ContactRouteMode.FLOOD)
 
-    assert commands.changed == ("", 0)
+    assert commands.changed == ("", None)
     assert commands.reset == key
 
 
