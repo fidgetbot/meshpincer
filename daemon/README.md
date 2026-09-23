@@ -76,6 +76,12 @@ delivery events, correlates the companion's expected ACK code, serializes
 radio operations, and enforces global and per-peer cooldowns before
 transmission.
 
+The local contact-management API can set a known contact to a verified zero-hop
+direct route or reset it to unknown/flood with
+`PATCH /v1/contacts/{public_key}/route`. Route changes share the daemon's
+serialized radio boundary and are immediately read back; arbitrary path bytes
+are not accepted.
+
 Channel sends require a configured private slot in the explicit daemon
 allowlist. Slot 0 (`Public`) is read-only. A successful companion submission is
 recorded as `transmitted`; MeshPincer never labels a channel broadcast

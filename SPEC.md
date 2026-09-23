@@ -67,6 +67,7 @@ Initial endpoints:
 - `PATCH /v1/device/autoadd`
 - `PUT /v1/contacts/{public_key}`
 - `DELETE /v1/contacts/{public_key}`
+- `PATCH /v1/contacts/{public_key}/route`
 - `GET /v1/channels?include_empty=<bool>`
 - `PUT /v1/channels/{channel_index}`
 - `PATCH /v1/channels/{channel_index}`
@@ -225,6 +226,9 @@ Contact import/delete and private-channel set/rename/clear are also performed
 through the long-lived daemon connection. They share the radio operation lock,
 refresh state by read-back, and no longer require stopping the daemon so a
 second process can claim the USB port.
+Contact routes can be set explicitly to verified zero-hop direct or reset to
+unknown/flood through the same boundary. Arbitrary path bytes are intentionally
+not accepted by this initial API.
 
 ### M2 — operator tools
 

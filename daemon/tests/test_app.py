@@ -9,6 +9,7 @@ from meshpincer.models import (
     AutoAddConfig,
     ChannelRecord,
     ContactRecord,
+    ContactRouteMode,
     InboundMessage,
     RadioStatus,
     RepeaterStatus,
@@ -82,6 +83,19 @@ class FakeRadioManager:
         del self.contact_records[public_key]
         self.contact_mutations.append(("remove", public_key))
         return public_key
+
+    async def set_contact_route(
+        self,
+        public_key: str,
+        mode: ContactRouteMode,
+    ) -> ContactRecord:
+        if public_key not in self.contact_records:
+            raise ValueError("contact is not known to the companion radio")
+        path_length = 0 if mode is ContactRouteMode.ZERO_HOP else -1
+        record = self.contact_records[public_key].model_copy(update={"path_length": path_length})
+        self.contact_records[public_key] = record
+        self.contact_mutations.append((f"route:{mode}", public_key))
+        return record
 
     async def channels(self, *, include_empty: bool = False) -> list[ChannelRecord]:
         return (
@@ -280,6 +294,47 @@ async def test_contact_management_uses_radio_manager_and_records_audit_events(
         "contact.upsert.succeeded",
         "contact.remove.requested",
         "contact.remove.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_contact_route_management_is_typed_verified_and_audited(
+    settings: Settings,
+) -> None:
+    radio = FakeRadioManager()
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    key = "ab" * 32
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            direct = await client.patch(
+                f"/v1/contacts/{key}/route",
+                json={"mode": "zero_hop"},
+            )
+            flood = await client.patch(
+                f"/v1/contacts/{key}/route",
+                json={"mode": "flood"},
+            )
+            invalid = await client.patch(
+                f"/v1/contacts/{key}/route",
+                json={"mode": "arbitrary_path"},
+            )
+            events = await client.get("/v1/events")
+
+    assert direct.status_code == 200
+    assert direct.json()["path_length"] == 0
+    assert flood.status_code == 200
+    assert flood.json()["path_length"] == -1
+    assert invalid.status_code == 422
+    assert radio.contact_mutations == [
+        ("route:zero_hop", key),
+        ("route:flood", key),
+    ]
+    assert [event["kind"] for event in events.json()] == [
+        "contact.route.update.requested",
+        "contact.route.update.succeeded",
+        "contact.route.update.requested",
+        "contact.route.update.succeeded",
     ]
 
 

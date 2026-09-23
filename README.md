@@ -152,6 +152,9 @@ The contact and private-channel management endpoints are intentionally local
 administrative APIs on the Unix socket, not general-purpose OpenClaw agent
 tools. Channel secrets are accepted only for a set operation and are never
 returned, logged, or written to the SQLite event payloads.
+Contact-route management is likewise typed and local-only: it can set a known
+contact to zero-hop direct or reset it to unknown/flood, then immediately reads
+the contact back from the radio. It does not accept arbitrary route bytes.
 
 The same local API can read and toggle the companion firmware's
 "overwrite oldest non-favorite when full" contact-retention bit. MeshPincer

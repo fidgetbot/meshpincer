@@ -10,7 +10,7 @@ from meshcore.events import Event, EventType
 
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
-from meshpincer.models import InboundMessage
+from meshpincer.models import ContactRouteMode, InboundMessage
 from meshpincer.radio import DirectSendOutcome, MeshCoreBackend, RadioManager, SendPolicyError
 from meshpincer.store import Store
 
@@ -39,6 +39,7 @@ class FakeBackend:
             }
         }
         self.contact_mutations: list[tuple[str, str]] = []
+        self.contact_route_mutations: list[tuple[str, ContactRouteMode]] = []
         self.channel_mutations: list[tuple[str, int, str]] = []
         self.autoadd_config = 0x06
         self.autoadd_max_hops = 4
@@ -134,6 +135,17 @@ class FakeBackend:
     async def remove_contact(self, public_key: str) -> None:
         self.contact_records.pop(public_key, None)
         self.contact_mutations.append(("remove", public_key))
+
+    async def set_contact_route(
+        self,
+        public_key: str,
+        mode: ContactRouteMode,
+    ) -> None:
+        if public_key not in self.contact_records:
+            raise ValueError("contact is not known to the companion radio")
+        self.contact_path_length = 0 if mode is ContactRouteMode.ZERO_HOP else -1
+        self.contact_records[public_key]["out_path_len"] = self.contact_path_length
+        self.contact_route_mutations.append((public_key, mode))
 
     async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None:
         assert channel_index == 1
@@ -299,6 +311,42 @@ async def test_manager_mutates_contacts_without_reconnecting(tmp_path: Path) -> 
     assert backend.contact_mutations == [
         ("upsert", "56" * 32),
         ("remove", "56" * 32),
+    ]
+
+
+async def test_manager_updates_contact_route_without_reconnecting(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        radio_task = manager._task
+        direct = await manager.set_contact_route("34" * 32, ContactRouteMode.ZERO_HOP)
+        flood = await manager.set_contact_route("34" * 32, ContactRouteMode.FLOOD)
+
+        assert manager._task is radio_task
+        assert not backend.disconnected
+    finally:
+        await manager.stop()
+
+    assert direct.path_length == 0
+    assert flood.path_length == -1
+    assert backend.contact_route_mutations == [
+        ("34" * 32, ContactRouteMode.ZERO_HOP),
+        ("34" * 32, ContactRouteMode.FLOOD),
     ]
 
 
@@ -948,6 +996,47 @@ async def test_meshcore_backend_upserts_contact_without_losing_route() -> None:
     assert commands.contact["out_path_len"] == 2
     assert commands.contact["out_path"] == "0102"
     assert commands.contact["last_advert"] == 123
+
+
+async def test_meshcore_backend_sets_zero_hop_and_resets_flood_route() -> None:
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.changed: tuple[str, int] | None = None
+            self.reset: str | None = None
+
+        async def change_contact_path(self, contact, path, path_hash_mode=None):
+            assert contact["public_key"] == "ab" * 32
+            self.changed = (path, path_hash_mode)
+            return Event(EventType.OK, {})
+
+        async def reset_path(self, public_key):
+            self.reset = public_key
+            return Event(EventType.OK, {})
+
+    commands = FakeCommands()
+    key = "ab" * 32
+    client = SimpleNamespace(
+        commands=commands,
+        contacts={
+            key: {
+                "public_key": key,
+                "adv_name": "Repeater",
+                "type": 2,
+                "flags": 1,
+                "out_path_len": -1,
+                "out_path_hash_mode": 0,
+                "out_path": "",
+                "last_advert": 123,
+            }
+        },
+    )
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    await backend.set_contact_route(key, ContactRouteMode.ZERO_HOP)
+    await backend.set_contact_route(key, ContactRouteMode.FLOOD)
+
+    assert commands.changed == ("", 0)
+    assert commands.reset == key
 
 
 async def test_meshcore_backend_reads_and_sets_autoadd_config() -> None:

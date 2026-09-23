@@ -27,6 +27,7 @@ from .models import (
     ServiceStatus,
     SetChannelRequest,
     UpdateAutoAddConfigRequest,
+    UpdateContactRouteRequest,
     UpsertContactRequest,
 )
 from .radio import RadioManager, SendPolicyError
@@ -199,6 +200,40 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         await store.append_event("contact.remove.succeeded", {"public_key": removed_key})
         return {"public_key": removed_key, "removed": True}
+
+    @app.patch("/v1/contacts/{public_key}/route", response_model=ContactRecord)
+    async def update_contact_route(
+        request: UpdateContactRouteRequest,
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> ContactRecord:
+        normalized_key = public_key.lower()
+        await store.append_event(
+            "contact.route.update.requested",
+            {"public_key": normalized_key, "mode": request.mode},
+        )
+        try:
+            contact = await radio.set_contact_route(normalized_key, request.mode)
+        except ValueError as exc:
+            await store.append_event(
+                "contact.route.update.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "contact.route.update.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event(
+            "contact.route.update.succeeded",
+            {
+                "public_key": normalized_key,
+                "mode": request.mode,
+                "path_length": contact.path_length,
+            },
+        )
+        return contact
 
     @app.get("/v1/channels", response_model=list[ChannelRecord])
     async def channels(include_empty: bool = False) -> list[ChannelRecord]:

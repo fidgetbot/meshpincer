@@ -71,6 +71,15 @@ class ContactRecord(BaseModel):
     last_advert: int | None = None
 
 
+class ContactRouteMode(StrEnum):
+    ZERO_HOP = "zero_hop"
+    FLOOD = "flood"
+
+
+class UpdateContactRouteRequest(BaseModel):
+    mode: ContactRouteMode
+
+
 class UpsertContactRequest(BaseModel):
     name: str = Field(min_length=1)
     node_type: int = Field(ge=0, le=4)

@@ -16,6 +16,7 @@ from .models import (
     AutoAddConfig,
     ChannelRecord,
     ContactRecord,
+    ContactRouteMode,
     InboundMessage,
     RadioHealth,
     RadioProfile,
@@ -47,6 +48,12 @@ class RadioBackend(Protocol):
     ) -> None: ...
 
     async def remove_contact(self, public_key: str) -> None: ...
+
+    async def set_contact_route(
+        self,
+        public_key: str,
+        mode: ContactRouteMode,
+    ) -> None: ...
 
     async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None: ...
 
@@ -235,6 +242,40 @@ class MeshCoreBackend:
             await self.client.commands.remove_contact(public_key),
             "contact removal",
         )
+
+    async def set_contact_route(
+        self,
+        public_key: str,
+        mode: ContactRouteMode,
+    ) -> None:
+        normalized_key = public_key.lower()
+        contact = next(
+            (
+                contact
+                for contact in self.client.contacts.values()
+                if str(contact.get("public_key", "")).lower() == normalized_key
+            ),
+            None,
+        )
+        if contact is None:
+            raise ValueError("contact is not known to the companion radio")
+        if mode is ContactRouteMode.ZERO_HOP:
+            _event_payload(
+                await self.client.commands.change_contact_path(
+                    contact,
+                    "",
+                    path_hash_mode=int(contact.get("out_path_hash_mode", 0)),
+                ),
+                "contact route update",
+            )
+            return
+        if mode is ContactRouteMode.FLOOD:
+            _event_payload(
+                await self.client.commands.reset_path(normalized_key),
+                "contact route reset",
+            )
+            return
+        raise ValueError("unsupported contact route mode")
 
     async def set_channel(self, channel_index: int, name: str, secret: bytes) -> None:
         _event_payload(
@@ -522,6 +563,34 @@ class RadioManager:
             async with self._lock:
                 self._contacts = records
             return normalized_key
+
+    async def set_contact_route(
+        self,
+        public_key: str,
+        mode: ContactRouteMode,
+    ) -> ContactRecord:
+        normalized_key = public_key.lower()
+        expected_path_length = 0 if mode is ContactRouteMode.ZERO_HOP else -1
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            async with self._lock:
+                exists = any(item.public_key.lower() == normalized_key for item in self._contacts)
+            if not exists:
+                raise ValueError("contact is not known to the companion radio")
+            await backend.set_contact_route(normalized_key, mode)
+            contacts = await backend.read_contacts()
+            records = self._contact_records(contacts)
+            contact = next(
+                (item for item in records if item.public_key.lower() == normalized_key),
+                None,
+            )
+            if contact is None:
+                raise ConnectionError("contact route update did not read back from the radio")
+            if contact.path_length != expected_path_length:
+                raise ConnectionError("contact route update did not read back from the radio")
+            async with self._lock:
+                self._contacts = records
+            return contact.model_copy(deep=True)
 
     async def set_channel(
         self,
