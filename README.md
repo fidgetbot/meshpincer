@@ -142,8 +142,9 @@ budget, use strict global/per-channel cooldowns, and are recorded as
 
 Read-only repeater status is implemented as one bounded request to an exact,
 known repeater public key. The daemon validates the contact type, records the
-outcome durably, and enforces global and per-repeater cooldowns. It never polls
-automatically or retries a timed-out request. Authenticated repeater
+outcome durably, and enforces a 30-second global cooldown plus a 60-second
+per-repeater cooldown. It never polls automatically or retries a timed-out
+request. Authenticated repeater
 configuration remains disabled until its read/change/read-back path is
 implemented and hardware-proven.
 

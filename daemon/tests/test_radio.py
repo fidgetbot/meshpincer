@@ -769,7 +769,7 @@ async def test_manager_requests_one_known_repeater_status_and_rate_limits(tmp_pa
         refresh_interval_seconds=60,
         repeater_status_timeout_seconds=7,
         repeater_status_global_cooldown_seconds=30,
-        repeater_status_peer_cooldown_seconds=900,
+        repeater_status_peer_cooldown_seconds=60,
     )
     backend = FakeBackend()
     backend.contact_node_type = 2
@@ -788,11 +788,15 @@ async def test_manager_requests_one_known_repeater_status_and_rate_limits(tmp_pa
         status = await manager.request_repeater_status("34" * 32)
         with pytest.raises(SendPolicyError, match="cooldown"):
             await manager.request_repeater_status("34" * 32)
+        manager._last_repeater_status -= 60
+        manager._last_repeater_status_by_peer["34" * 32] -= 60
+        second_status = await manager.request_repeater_status("34" * 32)
     finally:
         await manager.stop()
 
-    assert backend.repeater_status_requests == [("34" * 32, 7)]
+    assert backend.repeater_status_requests == [("34" * 32, 7), ("34" * 32, 7)]
     assert status.name == "Peer"
+    assert second_status.name == "Peer"
     assert status.battery_mv == 4095
     assert status.last_snr_db == 5.25
     assert status.receive_errors == 0

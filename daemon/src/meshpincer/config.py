@@ -40,7 +40,7 @@ class Settings:
     channel_per_channel_cooldown_seconds: float = 300.0
     repeater_status_timeout_seconds: float = 15.0
     repeater_status_global_cooldown_seconds: float = 30.0
-    repeater_status_peer_cooldown_seconds: float = 900.0
+    repeater_status_peer_cooldown_seconds: float = 60.0
     retention_days: int = 30
     max_messages: int = 50_000
     cursor_max_idle_days: int = 30
@@ -95,7 +95,7 @@ class Settings:
                 os.environ.get("MESHPINCER_REPEATER_STATUS_GLOBAL_COOLDOWN", "30")
             ),
             repeater_status_peer_cooldown_seconds=float(
-                os.environ.get("MESHPINCER_REPEATER_STATUS_PEER_COOLDOWN", "900")
+                os.environ.get("MESHPINCER_REPEATER_STATUS_PEER_COOLDOWN", "60")
             ),
             retention_days=_env_int("MESHPINCER_RETENTION_DAYS", 30),
             max_messages=_env_int("MESHPINCER_MAX_MESSAGES", 50_000),
