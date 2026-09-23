@@ -1092,6 +1092,10 @@ async def test_meshcore_backend_renames_channel_with_existing_secret() -> None:
 
 
 async def test_meshcore_backend_requests_repeater_status_once() -> None:
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
     class FakeCommands:
         def __init__(self) -> None:
             self.calls: list[tuple[str, float]] = []
@@ -1101,12 +1105,83 @@ async def test_meshcore_backend_requests_repeater_status_once() -> None:
             return {"bat": 4200, "recv_errors": 0}
 
     commands = FakeCommands()
-    backend = MeshCoreBackend(
-        SimpleNamespace(commands=commands),  # type: ignore[arg-type]
-        timeout=5.0,
+    client = SimpleNamespace(
+        commands=commands,
+        subscribe=lambda *_args: FakeSubscription(),
     )
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
 
     result = await backend.request_repeater_status("ab" * 32, timeout=11)
 
     assert commands.calls == [("ab" * 32, 11)]
-    assert result == {"bat": 4200, "recv_errors": 0}
+    assert result == {
+        "bat": 4200,
+        "recv_errors": 0,
+        "_response_correlation": "request_tag",
+    }
+
+
+async def test_meshcore_backend_correlates_untagged_status_by_requested_peer() -> None:
+    callback = None
+
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
+    class FakeCommands:
+        async def req_status_sync(self, _public_key: str, timeout: float):
+            assert timeout == 11
+            assert callback is not None
+            callback(
+                SimpleNamespace(
+                    payload={"pubkey_pre": "ab" * 6, "bat": 4200},
+                    attributes={"pubkey_prefix": "ab" * 6},
+                )
+            )
+            return None
+
+    def subscribe(event_type, event_callback):
+        nonlocal callback
+        assert event_type is EventType.STATUS_RESPONSE
+        callback = event_callback
+        return FakeSubscription()
+
+    client = SimpleNamespace(commands=FakeCommands(), subscribe=subscribe)
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    result = await backend.request_repeater_status("ab" * 32, timeout=11)
+
+    assert result == {
+        "pubkey_pre": "ab" * 6,
+        "bat": 4200,
+        "_response_correlation": "peer_prefix",
+    }
+
+
+async def test_meshcore_backend_rejects_untagged_status_from_other_peer() -> None:
+    callback = None
+
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
+    class FakeCommands:
+        async def req_status_sync(self, _public_key: str, timeout: float):
+            assert callback is not None
+            callback(
+                SimpleNamespace(
+                    payload={"pubkey_pre": "cd" * 6, "bat": 4200},
+                    attributes={"pubkey_prefix": "cd" * 6},
+                )
+            )
+            return None
+
+    def subscribe(_event_type, event_callback):
+        nonlocal callback
+        callback = event_callback
+        return FakeSubscription()
+
+    client = SimpleNamespace(commands=FakeCommands(), subscribe=subscribe)
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    assert await backend.request_repeater_status("ab" * 32, timeout=11) is None

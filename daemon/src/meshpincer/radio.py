@@ -410,7 +410,32 @@ class MeshCoreBackend:
         public_key: str,
         timeout: float,
     ) -> Mapping[str, Any] | None:
-        return await self.client.commands.req_status_sync(public_key, timeout=timeout)
+        requested_prefix = public_key[:12].lower()
+        loop = asyncio.get_running_loop()
+        peer_response: asyncio.Future[Mapping[str, Any]] = loop.create_future()
+
+        def capture_peer_response(event: Any) -> None:
+            payload = event.payload if isinstance(event.payload, Mapping) else {}
+            event_prefix = str(
+                event.attributes.get("pubkey_prefix") or payload.get("pubkey_pre") or ""
+            ).lower()
+            if event_prefix == requested_prefix and not peer_response.done():
+                peer_response.set_result(payload)
+
+        subscription = self.client.subscribe(EventType.STATUS_RESPONSE, capture_peer_response)
+        try:
+            payload = await self.client.commands.req_status_sync(public_key, timeout=timeout)
+            if payload is not None:
+                return {**payload, "_response_correlation": "request_tag"}
+            if peer_response.done():
+                logger.info("Accepted repeater status correlated by requested public-key prefix")
+                return {
+                    **peer_response.result(),
+                    "_response_correlation": "peer_prefix",
+                }
+            return None
+        finally:
+            subscription.unsubscribe()
 
     async def stop_receiving(self) -> None:
         if self._receiving:
@@ -757,6 +782,7 @@ class RadioManager:
                 public_key=normalized_key,
                 name=contact.name,
                 path_length=contact.path_length,
+                response_correlation=payload.get("_response_correlation", "request_tag"),
                 battery_mv=payload.get("bat"),
                 tx_queue_length=payload.get("tx_queue_len"),
                 noise_floor_dbm=payload.get("noise_floor"),

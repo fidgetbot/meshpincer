@@ -137,6 +137,7 @@ class RepeaterStatus(BaseModel):
     public_key: str
     name: str
     path_length: int | None = None
+    response_correlation: Literal["request_tag", "peer_prefix"] = "request_tag"
     battery_mv: int | None = None
     tx_queue_length: int | None = None
     noise_floor_dbm: int | None = None
