@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -155,6 +156,12 @@ async def test_initialize_migrates_the_original_message_schema(tmp_path: Path) -
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'consumer_cursors'"
         )
         cursor_table = await cursor.fetchone()
+        cursor = await db.execute("PRAGMA table_info(consumer_cursors)")
+        cursor_columns = {str(row[1]) for row in await cursor.fetchall()}
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'housekeeping_state'"
+        )
+        housekeeping_table = await cursor.fetchone()
 
     assert {
         "event_id",
@@ -166,6 +173,8 @@ async def test_initialize_migrates_the_original_message_schema(tmp_path: Path) -
         "ack_code",
     } <= columns
     assert cursor_table is not None
+    assert {"history_gap_before", "expired_at"} <= cursor_columns
+    assert housekeeping_table is not None
 
 
 async def test_outbound_delivery_transitions_are_durable(store: Store) -> None:
@@ -212,3 +221,146 @@ async def test_outbound_channel_transmit_is_durable_without_fake_ack(store: Stor
         "message.queued",
         "message.transmitted",
     ]
+
+
+async def test_housekeeping_prunes_only_events_consumed_by_active_cursors(store: Store) -> None:
+    records = [
+        await store.record_inbound(
+            InboundMessage(kind="channel", channel_index=0, text=f"message {index}")
+        )
+        for index in range(3)
+    ]
+    messages = [record for record, _inserted in records]
+    assert all(message.event_id is not None for message in messages)
+    old = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    async with aiosqlite.connect(store.path) as db:
+        await db.execute("UPDATE messages SET recorded_at = ?", (old,))
+        await db.execute("UPDATE events SET recorded_at = ?", (old,))
+        await db.commit()
+    await store.advance_cursor("active", int(messages[0].event_id or 0))
+
+    result = await store.run_housekeeping(
+        retention_days=30,
+        max_messages=50_000,
+        cursor_max_idle_days=30,
+        interval_seconds=86_400,
+        dry_run=False,
+    )
+
+    assert result.safe_through_event_id == messages[0].event_id
+    assert result.messages_pruned == 1
+    assert result.events_pruned == 1
+    assert [message.text for message in await store.list_messages(0, 100)] == [
+        "message 1",
+        "message 2",
+    ]
+    assert (await store.get_cursor("active")).history_gap is False
+
+
+async def test_housekeeping_expires_stale_cursor_and_reports_history_gap(store: Store) -> None:
+    records = [
+        await store.record_inbound(
+            InboundMessage(kind="channel", channel_index=0, text=f"message {index}")
+        )
+        for index in range(3)
+    ]
+    messages = [record for record, _inserted in records]
+    assert all(message.event_id is not None for message in messages)
+    await store.advance_cursor("abandoned", int(messages[0].event_id or 0))
+    old = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    async with aiosqlite.connect(store.path) as db:
+        await db.execute(
+            "UPDATE events SET recorded_at = ? WHERE id <= ?",
+            (old, messages[1].event_id),
+        )
+        await db.execute(
+            "UPDATE messages SET recorded_at = ? WHERE event_id <= ?",
+            (old, messages[1].event_id),
+        )
+        await db.execute(
+            "UPDATE consumer_cursors SET updated_at = ? WHERE consumer_id = 'abandoned'",
+            (old,),
+        )
+        await db.commit()
+
+    result = await store.run_housekeeping(
+        retention_days=30,
+        max_messages=50_000,
+        cursor_max_idle_days=30,
+        interval_seconds=86_400,
+        dry_run=False,
+    )
+    cursor = await store.get_cursor("abandoned")
+
+    assert result.cursors_expired == 1
+    assert result.prune_through_event_id == messages[1].event_id
+    assert cursor.event_id == messages[1].event_id
+    assert cursor.history_gap is True
+    assert cursor.history_gap_before == int(messages[1].event_id or 0) + 1
+    assert cursor.expired_at is not None
+    assert [event.id for event in await store.list_events(cursor.event_id, 100)] == [
+        messages[2].event_id
+    ]
+    cleared = await store.advance_cursor("abandoned", int(messages[2].event_id or 0))
+    assert cleared.history_gap is False
+
+
+async def test_housekeeping_enforces_message_cap_and_dry_run_is_non_mutating(
+    store: Store,
+) -> None:
+    for index in range(5):
+        await store.record_inbound(
+            InboundMessage(kind="channel", channel_index=0, text=f"message {index}")
+        )
+    latest = await store.last_event_id()
+    await store.advance_cursor("active", latest)
+
+    preview = await store.run_housekeeping(
+        retention_days=30,
+        max_messages=2,
+        cursor_max_idle_days=30,
+        interval_seconds=86_400,
+        dry_run=True,
+    )
+    assert preview.messages_pruned == 3
+    assert len(await store.list_messages(0, 100)) == 5
+
+    applied = await store.run_housekeeping(
+        retention_days=30,
+        max_messages=2,
+        cursor_max_idle_days=30,
+        interval_seconds=86_400,
+        dry_run=False,
+    )
+    assert applied.messages_pruned == 3
+    assert applied.events_pruned == 3
+    assert applied.checkpointed
+    assert [message.text for message in await store.list_messages(0, 100)] == [
+        "message 3",
+        "message 4",
+    ]
+    assert await store.last_event_id() == latest
+
+
+async def test_new_consumer_reports_gap_after_history_was_pruned(store: Store) -> None:
+    message, _ = await store.record_inbound(
+        InboundMessage(kind="channel", channel_index=0, text="old")
+    )
+    assert message.event_id is not None
+    old = (datetime.now(UTC) - timedelta(days=60)).isoformat()
+    async with aiosqlite.connect(store.path) as db:
+        await db.execute("UPDATE messages SET recorded_at = ?", (old,))
+        await db.execute("UPDATE events SET recorded_at = ?", (old,))
+        await db.commit()
+    await store.run_housekeeping(
+        retention_days=30,
+        max_messages=50_000,
+        cursor_max_idle_days=30,
+        interval_seconds=86_400,
+        dry_run=False,
+    )
+
+    cursor = await store.get_cursor("new-consumer")
+    assert cursor.event_id == 0
+    assert cursor.history_gap is True
+    assert cursor.history_gap_before == message.event_id + 1

@@ -119,6 +119,18 @@ only after successful processing. Cursor movement is monotonic, yielding
 at-least-once delivery without allowing a consumer to skip beyond the newest
 recorded event.
 
+Housekeeping defaults to a 30-day retention window, a 50,000-message cap, and a
+30-day consumer-idle window. It may remove only a contiguous event prefix that
+all active consumer cursors have passed. An idle cursor that blocks eligible
+history is advanced to the retained boundary and marked with an explicit
+history gap; the gap is cleared only by a later explicit cursor advance. A new
+consumer after pruning also sees the retained-history boundary. Cleanup uses
+transactions of at most 1,000 events, records its durable prune boundary with
+each batch, runs daily, and checkpoints/truncates the WAL after actual pruning.
+Status reports database/WAL sizes, row counts, oldest retained records,
+retention settings, and last/next cleanup. Manual housekeeping defaults to dry
+run. MeshPincer never runs automatic live `VACUUM`.
+
 The direct-send path is deliberately narrow: a known full public key, a learned
 direct route of any valid hop count, at most 160 UTF-8 bytes, one transmission,
 no flood fallback, and global plus per-peer cooldowns. It atomically records queued,

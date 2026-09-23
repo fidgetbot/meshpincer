@@ -29,6 +29,12 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_CHANNEL_GLOBAL_COOLDOWN` and
   `MESHPINCER_CHANNEL_PER_CHANNEL_COOLDOWN` — minimum seconds between channel
   floods globally and on the same slot (defaults: 30 and 300)
+- `MESHPINCER_RETENTION_DAYS` — full-history retention window (default: 30)
+- `MESHPINCER_MAX_MESSAGES` — bounded message-row target (default: 50000)
+- `MESHPINCER_CURSOR_MAX_IDLE_DAYS` — idle interval before a consumer cursor
+  may be expired with an explicit history gap (default: 30)
+- `MESHPINCER_HOUSEKEEPING_INTERVAL` — automatic cleanup interval in seconds
+  (default: 86400)
 
 When no serial override is set, discovery matches the configured USB identity
 and fails closed if more than one radio matches without a configured hardware
@@ -45,6 +51,7 @@ Implemented endpoints:
 - `GET /v1/consumers/{consumer_id}/events?limit=<n>`
 - `GET /v1/consumers/{consumer_id}/cursor`
 - `PUT /v1/consumers/{consumer_id}/cursor`
+- `POST /v1/database/housekeeping` (dry-run by default)
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
 
@@ -54,6 +61,13 @@ deduplicates protocol redelivery, and maintains independent monotonic cursors
 for consumers such as operator tools and the native MeshCore channel. Consumers
 advance their cursor after processing, so unacknowledged events replay after a
 restart.
+
+Housekeeping runs once at daemon startup and then daily. It prunes only data
+already consumed by every active cursor, uses 1,000-event transactions, and
+reports a durable history gap when an abandoned cursor is moved to the retained
+boundary. `GET /v1/status` includes database and WAL sizes, row counts, oldest
+retained timestamps, policy values, and last/next cleanup times. Cleanup
+checkpoints/truncates the WAL after pruning and never runs `VACUUM` automatically.
 
 Direct sends require a known contact with a learned route, accept at most 160
 UTF-8 bytes, and perform one transmission with no retry or flood fallback. The

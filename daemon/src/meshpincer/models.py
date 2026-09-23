@@ -149,11 +149,44 @@ class RepeaterStatus(BaseModel):
     requested_at: datetime
 
 
+class DatabaseStatus(BaseModel):
+    database_bytes: int = Field(ge=0)
+    wal_bytes: int = Field(ge=0)
+    message_count: int = Field(ge=0)
+    event_count: int = Field(ge=0)
+    consumer_count: int = Field(ge=0)
+    oldest_message_at: datetime | None = None
+    oldest_event_at: datetime | None = None
+    earliest_available_event_id: int | None = Field(default=None, ge=0)
+    pruned_through_event_id: int = Field(default=0, ge=0)
+    last_housekeeping_at: datetime | None = None
+    next_housekeeping_at: datetime | None = None
+    retention_days: int = Field(ge=1)
+    max_messages: int = Field(ge=1)
+    cursor_max_idle_days: int = Field(ge=1)
+
+
 class ServiceStatus(BaseModel):
     service: str = "meshpincer"
     version: str
     radio: RadioStatus
     last_event_id: int = 0
+    database: DatabaseStatus
+
+
+class HousekeepingRequest(BaseModel):
+    dry_run: bool = True
+
+
+class HousekeepingResult(BaseModel):
+    dry_run: bool
+    safe_through_event_id: int = Field(ge=0)
+    prune_through_event_id: int = Field(ge=0)
+    messages_pruned: int = Field(ge=0)
+    events_pruned: int = Field(ge=0)
+    cursors_expired: int = Field(ge=0)
+    checkpointed: bool = False
+    completed_at: datetime
 
 
 class MessageRecord(BaseModel):
@@ -196,6 +229,9 @@ class EventRecord(BaseModel):
 class ConsumerCursor(BaseModel):
     consumer_id: str
     event_id: int = Field(ge=0)
+    history_gap: bool = False
+    history_gap_before: int | None = Field(default=None, ge=1)
+    expired_at: datetime | None = None
 
 
 class AdvanceCursorRequest(BaseModel):

@@ -90,6 +90,15 @@ and atomically appends monotonically numbered events. Independent OpenClaw
 consumers can replay those events and advance durable cursors only after they
 have processed them, providing at-least-once delivery across restarts.
 
+SQLite housekeeping is bounded and cursor-aware. By default MeshPincer retains
+30 days and at most 50,000 messages, but removes only a contiguous event prefix
+already passed by every active consumer. Consumers idle for 30 days may expire;
+their next cursor read reports an explicit history gap and resumes at the
+retained boundary. Cleanup runs daily in batches of at most 1,000 events,
+checkpoints and truncates the WAL only after pruning, exposes database metrics
+through `meshcore_status`, supports a dry-run endpoint, and never performs an
+automatic live `VACUUM`.
+
 The receive path has been proven over RF with a second physical MeshCore node:
 both channel traffic and an encrypted direct message survived a clean daemon
 restart with stable message and event IDs. Outbound DMs have been transmitted

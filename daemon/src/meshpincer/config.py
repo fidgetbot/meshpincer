@@ -41,6 +41,20 @@ class Settings:
     repeater_status_timeout_seconds: float = 15.0
     repeater_status_global_cooldown_seconds: float = 30.0
     repeater_status_peer_cooldown_seconds: float = 900.0
+    retention_days: int = 30
+    max_messages: int = 50_000
+    cursor_max_idle_days: int = 30
+    housekeeping_interval_seconds: float = 86_400.0
+
+    def __post_init__(self) -> None:
+        if self.retention_days < 1:
+            raise ValueError("retention_days must be at least 1")
+        if self.max_messages < 1:
+            raise ValueError("max_messages must be at least 1")
+        if self.cursor_max_idle_days < 1:
+            raise ValueError("cursor_max_idle_days must be at least 1")
+        if self.housekeeping_interval_seconds <= 0:
+            raise ValueError("housekeeping_interval_seconds must be positive")
 
     @property
     def database_path(self) -> Path:
@@ -82,5 +96,11 @@ class Settings:
             ),
             repeater_status_peer_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_STATUS_PEER_COOLDOWN", "900")
+            ),
+            retention_days=_env_int("MESHPINCER_RETENTION_DAYS", 30),
+            max_messages=_env_int("MESHPINCER_MAX_MESSAGES", 50_000),
+            cursor_max_idle_days=_env_int("MESHPINCER_CURSOR_MAX_IDLE_DAYS", 30),
+            housekeeping_interval_seconds=float(
+                os.environ.get("MESHPINCER_HOUSEKEEPING_INTERVAL", "86400")
             ),
         )

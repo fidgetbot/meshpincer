@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 
-from .models import ConsumerCursor, DeliveryState, EventRecord, InboundMessage, MessageRecord
+from .models import (
+    ConsumerCursor,
+    DatabaseStatus,
+    DeliveryState,
+    EventRecord,
+    HousekeepingResult,
+    InboundMessage,
+    MessageRecord,
+)
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -43,11 +51,22 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS consumer_cursors (
     consumer_id TEXT PRIMARY KEY,
     event_id INTEGER NOT NULL DEFAULT 0 CHECK (event_id >= 0),
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    history_gap_before INTEGER,
+    expired_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS housekeeping_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    pruned_through_event_id INTEGER NOT NULL DEFAULT 0,
+    last_run_at TEXT,
+    next_run_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS messages_recorded_at_idx ON messages(recorded_at);
 CREATE INDEX IF NOT EXISTS events_kind_idx ON events(kind);
+CREATE INDEX IF NOT EXISTS events_recorded_at_idx ON events(recorded_at);
+CREATE INDEX IF NOT EXISTS consumer_cursors_updated_at_idx ON consumer_cursors(updated_at);
 """
 
 MESSAGE_MIGRATIONS = {
@@ -65,6 +84,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS messages_event_id_idx ON messages(event_id);
 CREATE UNIQUE INDEX IF NOT EXISTS messages_dedupe_key_idx ON messages(dedupe_key);
 """
 
+CURSOR_MIGRATIONS = {
+    "history_gap_before": "ALTER TABLE consumer_cursors ADD COLUMN history_gap_before INTEGER",
+    "expired_at": "ALTER TABLE consumer_cursors ADD COLUMN expired_at TEXT",
+}
+
 
 class Store:
     def __init__(self, path: Path) -> None:
@@ -79,12 +103,28 @@ class Store:
             for column, statement in MESSAGE_MIGRATIONS.items():
                 if column not in columns:
                     await db.execute(statement)
+            cursor = await db.execute("PRAGMA table_info(consumer_cursors)")
+            cursor_columns = {str(row[1]) for row in await cursor.fetchall()}
+            for column, statement in CURSOR_MIGRATIONS.items():
+                if column not in cursor_columns:
+                    await db.execute(statement)
             await db.executescript(POST_MIGRATION_SCHEMA)
             await db.commit()
 
     async def last_event_id(self) -> int:
         async with aiosqlite.connect(self.path) as db:
-            cursor = await db.execute("SELECT COALESCE(MAX(id), 0) FROM events")
+            cursor = await db.execute(
+                """
+                SELECT MAX(
+                    COALESCE((SELECT MAX(id) FROM events), 0),
+                    COALESCE((
+                        SELECT pruned_through_event_id
+                        FROM housekeeping_state
+                        WHERE singleton = 1
+                    ), 0)
+                )
+                """
+            )
             row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
@@ -353,18 +393,66 @@ class Store:
 
     async def get_cursor(self, consumer_id: str) -> ConsumerCursor:
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            state_cursor = await db.execute(
+                "SELECT pruned_through_event_id FROM housekeeping_state WHERE singleton = 1"
+            )
+            state_row = await state_cursor.fetchone()
+            pruned_through = int(state_row[0]) if state_row else 0
+            updated_at = datetime.now(UTC).isoformat()
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO consumer_cursors(
+                    consumer_id, event_id, updated_at, history_gap_before, expired_at
+                ) VALUES (?, 0, ?, ?, NULL)
+                """,
+                (
+                    consumer_id,
+                    updated_at,
+                    pruned_through + 1 if pruned_through > 0 else None,
+                ),
+            )
+            await db.execute(
+                "UPDATE consumer_cursors SET updated_at = ? WHERE consumer_id = ?",
+                (updated_at, consumer_id),
+            )
             cursor = await db.execute(
-                "SELECT event_id FROM consumer_cursors WHERE consumer_id = ?",
+                """
+                SELECT event_id, history_gap_before, expired_at
+                FROM consumer_cursors
+                WHERE consumer_id = ?
+                """,
                 (consumer_id,),
             )
             row = await cursor.fetchone()
-        return ConsumerCursor(consumer_id=consumer_id, event_id=int(row[0]) if row else 0)
+            await db.commit()
+        if row is None:
+            raise RuntimeError("consumer cursor could not be created")
+        gap_before = int(row[1]) if row[1] is not None else None
+        return ConsumerCursor(
+            consumer_id=consumer_id,
+            event_id=int(row[0]),
+            history_gap=gap_before is not None,
+            history_gap_before=gap_before,
+            expired_at=datetime.fromisoformat(row[2]) if row[2] else None,
+        )
 
     async def advance_cursor(self, consumer_id: str, event_id: int) -> ConsumerCursor:
         updated_at = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.path) as db:
             await db.execute("BEGIN IMMEDIATE")
-            latest_cursor = await db.execute("SELECT COALESCE(MAX(id), 0) FROM events")
+            latest_cursor = await db.execute(
+                """
+                SELECT MAX(
+                    COALESCE((SELECT MAX(id) FROM events), 0),
+                    COALESCE((
+                        SELECT pruned_through_event_id
+                        FROM housekeeping_state
+                        WHERE singleton = 1
+                    ), 0)
+                )
+                """
+            )
             latest_row = await latest_cursor.fetchone()
             latest = int(latest_row[0]) if latest_row else 0
             if event_id > latest:
@@ -380,19 +468,281 @@ class Store:
                         WHEN excluded.event_id >= consumer_cursors.event_id
                         THEN excluded.updated_at
                         ELSE consumer_cursors.updated_at
+                    END,
+                    history_gap_before = CASE
+                        WHEN excluded.event_id >= consumer_cursors.event_id THEN NULL
+                        ELSE consumer_cursors.history_gap_before
+                    END,
+                    expired_at = CASE
+                        WHEN excluded.event_id >= consumer_cursors.event_id THEN NULL
+                        ELSE consumer_cursors.expired_at
                     END
                 """,
                 (consumer_id, event_id, updated_at),
             )
             cursor = await db.execute(
-                "SELECT event_id FROM consumer_cursors WHERE consumer_id = ?",
+                """
+                SELECT event_id, history_gap_before, expired_at
+                FROM consumer_cursors
+                WHERE consumer_id = ?
+                """,
                 (consumer_id,),
             )
             row = await cursor.fetchone()
             await db.commit()
         if row is None:
             raise RuntimeError("consumer cursor could not be read back")
-        return ConsumerCursor(consumer_id=consumer_id, event_id=int(row[0]))
+        gap_before = int(row[1]) if row[1] is not None else None
+        return ConsumerCursor(
+            consumer_id=consumer_id,
+            event_id=int(row[0]),
+            history_gap=gap_before is not None,
+            history_gap_before=gap_before,
+            expired_at=datetime.fromisoformat(row[2]) if row[2] else None,
+        )
+
+    async def database_status(
+        self,
+        *,
+        retention_days: int,
+        max_messages: int,
+        cursor_max_idle_days: int,
+    ) -> DatabaseStatus:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM messages),
+                    (SELECT COUNT(*) FROM events),
+                    (SELECT COUNT(*) FROM consumer_cursors),
+                    (SELECT MIN(recorded_at) FROM messages),
+                    (SELECT MIN(recorded_at) FROM events),
+                    (SELECT MIN(id) FROM events),
+                    (SELECT pruned_through_event_id FROM housekeeping_state WHERE singleton = 1),
+                    (SELECT last_run_at FROM housekeeping_state WHERE singleton = 1),
+                    (SELECT next_run_at FROM housekeeping_state WHERE singleton = 1)
+                """
+            )
+            row = await cursor.fetchone()
+        database_bytes = self.path.stat().st_size if self.path.exists() else 0
+        wal_path = Path(f"{self.path}-wal")
+        wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        assert row is not None
+        return DatabaseStatus(
+            database_bytes=database_bytes,
+            wal_bytes=wal_bytes,
+            message_count=int(row[0]),
+            event_count=int(row[1]),
+            consumer_count=int(row[2]),
+            oldest_message_at=datetime.fromisoformat(row[3]) if row[3] else None,
+            oldest_event_at=datetime.fromisoformat(row[4]) if row[4] else None,
+            earliest_available_event_id=int(row[5]) if row[5] is not None else None,
+            pruned_through_event_id=int(row[6]) if row[6] is not None else 0,
+            last_housekeeping_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            next_housekeeping_at=datetime.fromisoformat(row[8]) if row[8] else None,
+            retention_days=retention_days,
+            max_messages=max_messages,
+            cursor_max_idle_days=cursor_max_idle_days,
+        )
+
+    async def run_housekeeping(
+        self,
+        *,
+        retention_days: int,
+        max_messages: int,
+        cursor_max_idle_days: int,
+        interval_seconds: float,
+        dry_run: bool,
+        now: datetime | None = None,
+    ) -> HousekeepingResult:
+        current = now or datetime.now(UTC)
+        retention_before = (current - timedelta(days=retention_days)).isoformat()
+        active_after = (current - timedelta(days=cursor_max_idle_days)).isoformat()
+        completed_at = current.isoformat()
+        next_run_at = (current + timedelta(seconds=interval_seconds)).isoformat()
+
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA foreign_keys=ON")
+            await db.execute("BEGIN IMMEDIATE")
+            latest_cursor = await db.execute(
+                """
+                SELECT MAX(
+                    COALESCE((SELECT MAX(id) FROM events), 0),
+                    COALESCE((
+                        SELECT pruned_through_event_id
+                        FROM housekeeping_state
+                        WHERE singleton = 1
+                    ), 0)
+                )
+                """
+            )
+            latest_row = await latest_cursor.fetchone()
+            latest = int(latest_row[0]) if latest_row else 0
+
+            active_cursor = await db.execute(
+                "SELECT MIN(event_id) FROM consumer_cursors WHERE updated_at >= ?",
+                (active_after,),
+            )
+            active_row = await active_cursor.fetchone()
+            safe_through = (
+                int(active_row[0]) if active_row and active_row[0] is not None else latest
+            )
+
+            age_cursor = await db.execute(
+                "SELECT MIN(id) FROM events WHERE id <= ? AND recorded_at >= ?",
+                (safe_through, retention_before),
+            )
+            age_row = await age_cursor.fetchone()
+            age_cutoff = int(age_row[0]) - 1 if age_row and age_row[0] is not None else safe_through
+
+            count_cursor = await db.execute("SELECT COUNT(*) FROM messages")
+            count_row = await count_cursor.fetchone()
+            message_count = int(count_row[0]) if count_row else 0
+            overflow = max(message_count - max_messages, 0)
+            cap_cutoff = 0
+            if overflow:
+                eligible_cursor = await db.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM messages
+                    WHERE event_id IS NOT NULL AND event_id <= ?
+                    """,
+                    (safe_through,),
+                )
+                eligible_row = await eligible_cursor.fetchone()
+                eligible = int(eligible_row[0]) if eligible_row else 0
+                prune_count = min(overflow, eligible)
+                if prune_count:
+                    cap_cursor = await db.execute(
+                        """
+                        SELECT event_id
+                        FROM messages
+                        WHERE event_id IS NOT NULL AND event_id <= ?
+                        ORDER BY event_id ASC
+                        LIMIT 1 OFFSET ?
+                        """,
+                        (safe_through, prune_count - 1),
+                    )
+                    cap_row = await cap_cursor.fetchone()
+                    cap_cutoff = int(cap_row[0]) if cap_row else 0
+
+            prune_through = min(max(age_cutoff, cap_cutoff), safe_through)
+            messages_cursor = await db.execute(
+                "SELECT COUNT(*) FROM messages WHERE event_id IS NOT NULL AND event_id <= ?",
+                (prune_through,),
+            )
+            messages_row = await messages_cursor.fetchone()
+            messages_pruned = int(messages_row[0]) if messages_row else 0
+            events_cursor = await db.execute(
+                "SELECT COUNT(*) FROM events WHERE id <= ?",
+                (prune_through,),
+            )
+            events_row = await events_cursor.fetchone()
+            events_pruned = int(events_row[0]) if events_row else 0
+            expired_cursor = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM consumer_cursors
+                WHERE updated_at < ? AND event_id < ?
+                """,
+                (active_after, prune_through),
+            )
+            expired_row = await expired_cursor.fetchone()
+            cursors_expired = int(expired_row[0]) if expired_row else 0
+
+            if dry_run:
+                await db.rollback()
+            else:
+                await db.rollback()
+                messages_pruned = 0
+                events_pruned = 0
+                while prune_through > 0:
+                    await db.execute("BEGIN IMMEDIATE")
+                    batch_cursor = await db.execute(
+                        "SELECT id FROM events WHERE id <= ? ORDER BY id ASC LIMIT 1000",
+                        (prune_through,),
+                    )
+                    batch_rows = await batch_cursor.fetchall()
+                    if not batch_rows:
+                        await db.rollback()
+                        break
+                    batch_through = int(batch_rows[-1][0])
+                    deleted_messages = await db.execute(
+                        "DELETE FROM messages WHERE event_id IS NOT NULL AND event_id <= ?",
+                        (batch_through,),
+                    )
+                    deleted_events = await db.execute(
+                        "DELETE FROM events WHERE id <= ?",
+                        (batch_through,),
+                    )
+                    await db.execute(
+                        """
+                        UPDATE consumer_cursors
+                        SET event_id = ?, history_gap_before = ?, expired_at = ?
+                        WHERE updated_at < ? AND event_id < ?
+                        """,
+                        (
+                            batch_through,
+                            batch_through + 1,
+                            completed_at,
+                            active_after,
+                            batch_through,
+                        ),
+                    )
+                    await db.execute(
+                        """
+                        INSERT INTO housekeeping_state(
+                            singleton, pruned_through_event_id, last_run_at, next_run_at
+                        ) VALUES (1, ?, ?, ?)
+                        ON CONFLICT(singleton) DO UPDATE SET
+                            pruned_through_event_id = MAX(
+                                housekeeping_state.pruned_through_event_id,
+                                excluded.pruned_through_event_id
+                            ),
+                            last_run_at = excluded.last_run_at,
+                            next_run_at = excluded.next_run_at
+                        """,
+                        (batch_through, completed_at, next_run_at),
+                    )
+                    await db.commit()
+                    messages_pruned += max(deleted_messages.rowcount, 0)
+                    events_pruned += max(deleted_events.rowcount, 0)
+
+                await db.execute("BEGIN IMMEDIATE")
+                await db.execute(
+                    """
+                    INSERT INTO housekeeping_state(
+                        singleton, pruned_through_event_id, last_run_at, next_run_at
+                    ) VALUES (1, ?, ?, ?)
+                    ON CONFLICT(singleton) DO UPDATE SET
+                        pruned_through_event_id = MAX(
+                            housekeeping_state.pruned_through_event_id,
+                            excluded.pruned_through_event_id
+                        ),
+                        last_run_at = excluded.last_run_at,
+                        next_run_at = excluded.next_run_at
+                    """,
+                    (prune_through, completed_at, next_run_at),
+                )
+                await db.commit()
+
+        checkpointed = False
+        if not dry_run and (messages_pruned or events_pruned):
+            async with aiosqlite.connect(self.path) as checkpoint_db:
+                checkpoint_cursor = await checkpoint_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                checkpoint_row = await checkpoint_cursor.fetchone()
+            checkpointed = bool(checkpoint_row and int(checkpoint_row[0]) == 0)
+
+        return HousekeepingResult(
+            dry_run=dry_run,
+            safe_through_event_id=safe_through,
+            prune_through_event_id=prune_through,
+            messages_pruned=messages_pruned,
+            events_pruned=events_pruned,
+            cursors_expired=cursors_expired,
+            checkpointed=checkpointed,
+            completed_at=current,
+        )
 
 
 def _inbound_dedupe_key(message: InboundMessage) -> str:

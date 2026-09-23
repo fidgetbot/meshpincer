@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Path, Query
 
@@ -14,6 +16,8 @@ from .models import (
     ContactRecord,
     DeliveryState,
     EventRecord,
+    HousekeepingRequest,
+    HousekeepingResult,
     MessageRecord,
     RenameChannelRequest,
     RepeaterConfigRequest,
@@ -28,6 +32,8 @@ from .models import (
 from .radio import RadioManager, SendPolicyError
 from .store import Store
 
+logger = logging.getLogger(__name__)
+
 
 def create_app(
     settings: Settings | None = None,
@@ -41,10 +47,39 @@ def create_app(
     async def lifespan(_app: FastAPI):
         resolved.state_dir.mkdir(parents=True, exist_ok=True)
         await store.initialize()
+        await store.run_housekeeping(
+            retention_days=resolved.retention_days,
+            max_messages=resolved.max_messages,
+            cursor_max_idle_days=resolved.cursor_max_idle_days,
+            interval_seconds=resolved.housekeeping_interval_seconds,
+            dry_run=False,
+        )
+
+        async def housekeeping_loop() -> None:
+            while True:
+                await asyncio.sleep(resolved.housekeeping_interval_seconds)
+                try:
+                    await store.run_housekeeping(
+                        retention_days=resolved.retention_days,
+                        max_messages=resolved.max_messages,
+                        cursor_max_idle_days=resolved.cursor_max_idle_days,
+                        interval_seconds=resolved.housekeeping_interval_seconds,
+                        dry_run=False,
+                    )
+                except Exception:
+                    logger.exception("scheduled SQLite housekeeping failed")
+
+        housekeeping_task = asyncio.create_task(
+            housekeeping_loop(),
+            name="meshpincer-housekeeping",
+        )
         await radio.start()
         try:
             yield
         finally:
+            housekeeping_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await housekeeping_task
             await radio.stop()
 
     app = FastAPI(title="MeshPincer", version=__version__, lifespan=lifespan)
@@ -55,6 +90,21 @@ def create_app(
             version=__version__,
             radio=await radio.status(),
             last_event_id=await store.last_event_id(),
+            database=await store.database_status(
+                retention_days=resolved.retention_days,
+                max_messages=resolved.max_messages,
+                cursor_max_idle_days=resolved.cursor_max_idle_days,
+            ),
+        )
+
+    @app.post("/v1/database/housekeeping", response_model=HousekeepingResult)
+    async def run_housekeeping(request: HousekeepingRequest) -> HousekeepingResult:
+        return await store.run_housekeeping(
+            retention_days=resolved.retention_days,
+            max_messages=resolved.max_messages,
+            cursor_max_idle_days=resolved.cursor_max_idle_days,
+            interval_seconds=resolved.housekeeping_interval_seconds,
+            dry_run=request.dry_run,
         )
 
     @app.get("/v1/contacts", response_model=list[ContactRecord])

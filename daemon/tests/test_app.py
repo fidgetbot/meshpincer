@@ -164,7 +164,8 @@ async def test_status_starts_disconnected(settings: Settings) -> None:
             response = await client.get("/v1/status")
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    assert payload == {
         "service": "meshpincer",
         "version": "0.1.0",
         "radio": {
@@ -182,7 +183,14 @@ async def test_status_starts_disconnected(settings: Settings) -> None:
             "last_error": None,
         },
         "last_event_id": 0,
+        "database": payload["database"],
     }
+    assert payload["database"]["message_count"] == 0
+    assert payload["database"]["event_count"] == 0
+    assert payload["database"]["retention_days"] == 30
+    assert payload["database"]["max_messages"] == 50_000
+    assert payload["database"]["last_housekeeping_at"] is not None
+    assert payload["database"]["next_housekeeping_at"] is not None
 
 
 @pytest.mark.asyncio
@@ -380,9 +388,25 @@ async def test_events_and_consumer_cursor_api(settings: Settings) -> None:
     assert cursor.json() == {
         "consumer_id": "native-channel",
         "event_id": message.event_id,
+        "history_gap": False,
+        "history_gap_before": None,
+        "expired_at": None,
     }
     assert no_pending.json() == []
     assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_endpoint_defaults_to_dry_run(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/v1/database/housekeeping", json={})
+
+    assert response.status_code == 200
+    assert response.json()["dry_run"] is True
+    assert response.json()["messages_pruned"] == 0
 
 
 @pytest.mark.asyncio
