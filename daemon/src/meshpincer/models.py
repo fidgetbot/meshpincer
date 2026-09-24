@@ -65,6 +65,8 @@ class RadioProfile(BaseModel):
 
 
 class RadioHealth(BaseModel):
+    device_time: int | None = None
+    clock_offset_seconds: float | None = None
     battery_mv: int | None = None
     storage_used_kb: int | None = None
     storage_total_kb: int | None = None

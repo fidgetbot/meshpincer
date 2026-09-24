@@ -1206,6 +1206,53 @@ async def test_meshcore_backend_requests_repeater_status_once() -> None:
     }
 
 
+async def test_status_diagnostics_count_unparsed_response_without_payload_leak(caplog) -> None:
+    callbacks = {}
+    removed = []
+
+    def subscribe(kind, callback):
+        callbacks[kind] = callback
+        return SimpleNamespace(unsubscribe=lambda: removed.append(kind))
+
+    async def request(_public_key, timeout):
+        callbacks[EventType.BINARY_RESPONSE](
+            Event(EventType.BINARY_RESPONSE, {"data": "private-payload"})
+        )
+        return None
+
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=SimpleNamespace(req_status_sync=request), subscribe=subscribe),
+        timeout=5,
+    )
+    assert await backend.request_repeater_status("ab" * 32, timeout=1) is None
+    assert "'binary_responses': 1" in caplog.text
+    assert "'matching_status': 0" in caplog.text
+    assert "private-payload" not in caplog.text
+    assert set(removed) == {EventType.BINARY_RESPONSE, EventType.STATUS_RESPONSE}
+
+
+async def test_read_status_reads_clock_without_setting_it() -> None:
+    from datetime import UTC, datetime
+
+    calls = []
+    now = int(datetime.now(UTC).timestamp())
+
+    class Commands:
+        def __getattr__(self, name):
+            async def command(**_kwargs):
+                calls.append(name)
+                assert name != "set_time"
+                return Event(EventType.OK, {"time": now} if name == "get_time" else {})
+
+            return command
+
+    backend = MeshCoreBackend(SimpleNamespace(commands=Commands()), timeout=5)
+    snapshot, _ = await backend.read_status()
+    assert snapshot["clock"]["time"] == now
+    assert abs(snapshot["clock"]["offset_seconds"]) < 2
+    assert calls.count("get_time") == 1
+
+
 async def test_meshcore_backend_correlates_untagged_status_by_requested_peer() -> None:
     callback = None
 
@@ -1227,6 +1274,8 @@ async def test_meshcore_backend_correlates_untagged_status_by_requested_peer() -
 
     def subscribe(event_type, event_callback):
         nonlocal callback
+        if event_type is EventType.BINARY_RESPONSE:
+            return FakeSubscription()
         assert event_type is EventType.STATUS_RESPONSE
         callback = event_callback
         return FakeSubscription()
@@ -1297,6 +1346,8 @@ async def test_meshcore_backend_requests_legacy_status_once_by_peer_prefix() -> 
 
     def subscribe(event_type, event_callback):
         nonlocal callback
+        if event_type is EventType.BINARY_RESPONSE:
+            return FakeSubscription()
         assert event_type is EventType.STATUS_RESPONSE
         callback = event_callback
         return FakeSubscription()

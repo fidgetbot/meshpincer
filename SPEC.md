@@ -155,6 +155,12 @@ four-byte ACK code returned by the companion protocol.
 
 ## Agent airtime and safety policy
 
+Local status includes the companion RTC time and its offset from the host, read
+without changing the device clock. Repeater status requests count generic binary
+and parsed status responses during their bounded wait; missing matching status
+is logged using counts and the requested peer prefix only, never packet payloads.
+These diagnostics do not add RF transmissions or automatic retries.
+
 The transmit path must implement the project policy in
 [`docs/agent-etiquette.md`](docs/agent-etiquette.md). In particular:
 

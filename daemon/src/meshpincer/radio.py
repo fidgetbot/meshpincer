@@ -163,6 +163,8 @@ class MeshCoreBackend:
         radio = _event_payload(await commands.get_stats_radio(), "radio stats")
         packets = _event_payload(await commands.get_stats_packets(), "packet stats")
         telemetry = _event_payload(await commands.get_self_telemetry(), "self telemetry")
+        clock = _event_payload(await commands.get_time(), "device clock")
+        clock["offset_seconds"] = clock["time"] - datetime.now(UTC).timestamp()
         return (
             {
                 "self": self_info,
@@ -172,6 +174,7 @@ class MeshCoreBackend:
                 "radio": radio,
                 "packets": packets,
                 "telemetry": telemetry,
+                "clock": clock,
             },
             int(device.get("max_channels", 0)),
         )
@@ -428,15 +431,24 @@ class MeshCoreBackend:
         requested_prefix = public_key[:12].lower()
         loop = asyncio.get_running_loop()
         peer_response: asyncio.Future[Mapping[str, Any]] = loop.create_future()
+        diagnostics = {"binary_responses": 0, "status_responses": 0, "matching_status": 0}
+
+        def capture_binary_response(_event: Any) -> None:
+            diagnostics["binary_responses"] += 1
 
         def capture_peer_response(event: Any) -> None:
+            diagnostics["status_responses"] += 1
             payload = event.payload if isinstance(event.payload, Mapping) else {}
             event_prefix = str(
                 event.attributes.get("pubkey_prefix") or payload.get("pubkey_pre") or ""
             ).lower()
             if event_prefix == requested_prefix and not peer_response.done():
+                diagnostics["matching_status"] += 1
                 peer_response.set_result(payload)
 
+        binary_subscription = self.client.subscribe(
+            EventType.BINARY_RESPONSE, capture_binary_response
+        )
         subscription = self.client.subscribe(EventType.STATUS_RESPONSE, capture_peer_response)
         try:
             if transport is RepeaterStatusTransport.LEGACY:
@@ -462,6 +474,14 @@ class MeshCoreBackend:
             return None
         finally:
             subscription.unsubscribe()
+            binary_subscription.unsubscribe()
+            if not peer_response.done():
+                logger.warning(
+                    "Repeater response diagnostics peer=%s transport=%s counts=%s",
+                    requested_prefix,
+                    transport.value,
+                    diagnostics,
+                )
 
     async def login_repeater(
         self,
@@ -984,6 +1004,8 @@ class RadioManager:
                 tx_power_dbm=int(self_info["tx_power"]),
             ),
             health=RadioHealth(
+                device_time=payloads.get("clock", {}).get("time"),
+                clock_offset_seconds=payloads.get("clock", {}).get("offset_seconds"),
                 battery_mv=core.get("battery_mv", battery.get("level")),
                 storage_used_kb=battery.get("used_kb"),
                 storage_total_kb=battery.get("total_kb"),
