@@ -11,7 +11,13 @@ from meshcore.events import Event, EventType
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
 from meshpincer.models import ContactRouteMode, InboundMessage, RepeaterStatusTransport
-from meshpincer.radio import DirectSendOutcome, MeshCoreBackend, RadioManager, SendPolicyError
+from meshpincer.radio import (
+    DirectSendOutcome,
+    MeshCoreBackend,
+    RadioManager,
+    RepeaterLoginDenied,
+    SendPolicyError,
+)
 from meshpincer.store import Store
 
 
@@ -26,6 +32,7 @@ class FakeBackend:
         self.channel_one_name = ""
         self.channel_sent: list[tuple[int, str]] = []
         self.repeater_status_requests: list[tuple[str, float]] = []
+        self.repeater_login_requests: list[tuple[str, str, float]] = []
         self.contact_records: dict[str, dict[str, Any]] = {
             "34" * 32: {
                 "public_key": "34" * 32,
@@ -210,6 +217,14 @@ class FakeBackend:
             "flood_dups": 2,
             "rx_airtime": 20,
             "recv_errors": 0,
+        }
+
+    async def login_repeater(self, public_key: str, password: str, timeout: float):
+        self.repeater_login_requests.append((public_key, password, timeout))
+        return {
+            "permissions": 0,
+            "is_admin": False,
+            "_login_succeeded": True,
         }
 
     async def disconnect(self) -> None:
@@ -884,6 +899,71 @@ async def test_manager_rejects_non_repeater_status_target_without_transmit(
     assert backend.repeater_status_requests == []
 
 
+async def test_manager_logs_into_one_known_repeater_and_rate_limits(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_login_timeout_seconds=7,
+        repeater_login_global_cooldown_seconds=30,
+        repeater_login_peer_cooldown_seconds=60,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        result = await manager.login_repeater("34" * 32, "guest-pass")
+        with pytest.raises(SendPolicyError, match="cooldown"):
+            await manager.login_repeater("34" * 32, "guest-pass")
+    finally:
+        await manager.stop()
+
+    assert backend.repeater_login_requests == [("34" * 32, "guest-pass", 7)]
+    assert result.name == "Peer"
+    assert result.is_admin is False
+
+
+async def test_manager_reports_repeater_login_denial(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def denied(_public_key: str, _password: str, _timeout: float):
+        return {"_login_succeeded": False}
+
+    backend.login_repeater = denied  # type: ignore[method-assign]
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(RepeaterLoginDenied, match="rejected"):
+            await manager.login_repeater("34" * 32, "wrong")
+    finally:
+        await manager.stop()
+
+
 async def test_meshcore_backend_correlates_early_ack() -> None:
     expected_ack = bytes.fromhex("01020304")
 
@@ -1236,4 +1316,81 @@ async def test_meshcore_backend_requests_legacy_status_once_by_peer_prefix() -> 
         "pubkey_pre": "ab" * 6,
         "bat": 4200,
         "_response_correlation": "peer_prefix",
+    }
+
+
+async def test_meshcore_backend_correlates_repeater_login_by_exact_peer_prefix() -> None:
+    callbacks = {}
+
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
+    class FakeCommands:
+        async def send_login(self, public_key: str, password: str):
+            assert public_key == "ab" * 32
+            assert password == "guest-pass"
+            callbacks[EventType.LOGIN_SUCCESS](
+                Event(
+                    EventType.LOGIN_SUCCESS,
+                    {"pubkey_prefix": "cd" * 6, "permissions": 1, "is_admin": True},
+                    {"pubkey_prefix": "cd" * 6},
+                )
+            )
+            callbacks[EventType.LOGIN_SUCCESS](
+                Event(
+                    EventType.LOGIN_SUCCESS,
+                    {"pubkey_prefix": "ab" * 6, "permissions": 0, "is_admin": False},
+                    {"pubkey_prefix": "ab" * 6},
+                )
+            )
+            return Event(EventType.MSG_SENT, {"suggested_timeout": 4000})
+
+    def subscribe(event_type, event_callback):
+        callbacks[event_type] = event_callback
+        return FakeSubscription()
+
+    client = SimpleNamespace(commands=FakeCommands(), subscribe=subscribe)
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    result = await backend.login_repeater("ab" * 32, "guest-pass", timeout=1)
+
+    assert result == {
+        "pubkey_prefix": "ab" * 6,
+        "permissions": 0,
+        "is_admin": False,
+        "_login_succeeded": True,
+    }
+
+
+async def test_meshcore_backend_reports_exact_peer_login_failure() -> None:
+    callbacks = {}
+
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
+    class FakeCommands:
+        async def send_login(self, _public_key: str, _password: str):
+            callbacks[EventType.LOGIN_FAILED](
+                Event(
+                    EventType.LOGIN_FAILED,
+                    {"pubkey_prefix": "ab" * 6},
+                    {"pubkey_prefix": "ab" * 6},
+                )
+            )
+            return Event(EventType.MSG_SENT, {"suggested_timeout": 4000})
+
+    def subscribe(event_type, event_callback):
+        callbacks[event_type] = event_callback
+        return FakeSubscription()
+
+    client = SimpleNamespace(commands=FakeCommands(), subscribe=subscribe)
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    result = await backend.login_repeater("ab" * 32, "wrong", timeout=1)
+
+    assert result == {
+        "pubkey_prefix": "ab" * 6,
+        "_login_succeeded": False,
     }

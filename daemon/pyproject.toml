@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 meshpincerd = "meshpincer.main:main"
+meshpincer-repeater-login = "meshpincer.login_cli:main"
 
 [dependency-groups]
 dev = [

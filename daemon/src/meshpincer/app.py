@@ -22,6 +22,8 @@ from .models import (
     MessageRecord,
     RenameChannelRequest,
     RepeaterConfigRequest,
+    RepeaterLoginRequest,
+    RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
     SendMessageRequest,
@@ -32,7 +34,7 @@ from .models import (
     UpdateContactRouteRequest,
     UpsertContactRequest,
 )
-from .radio import RadioManager, SendPolicyError
+from .radio import RadioManager, RepeaterLoginDenied, SendPolicyError
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -512,6 +514,58 @@ def create_app(
 
         await store.append_event(
             "repeater.status.succeeded",
+            result.model_dump(mode="json"),
+        )
+        return result
+
+    @app.post("/v1/repeaters/{public_key}/login", response_model=RepeaterLoginResult)
+    async def login_repeater(
+        request: RepeaterLoginRequest,
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterLoginResult:
+        normalized_key = public_key.lower()
+        await store.append_event(
+            "repeater.login.requested",
+            {"public_key": normalized_key},
+        )
+        try:
+            result = await radio.login_repeater(
+                normalized_key,
+                request.password.get_secret_value(),
+            )
+        except SendPolicyError as exc:
+            await store.append_event(
+                "repeater.login.rate_limited",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event(
+                "repeater.login.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RepeaterLoginDenied as exc:
+            await store.append_event(
+                "repeater.login.denied",
+                {"public_key": normalized_key},
+            )
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event(
+                "repeater.login.timed_out",
+                {"public_key": normalized_key},
+            )
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "repeater.login.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        await store.append_event(
+            "repeater.login.succeeded",
             result.model_dump(mode="json"),
         )
         return result

@@ -29,6 +29,11 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_CHANNEL_GLOBAL_COOLDOWN` and
   `MESHPINCER_CHANNEL_PER_CHANNEL_COOLDOWN` — minimum seconds between channel
   floods globally and on the same slot (defaults: 30 and 300)
+- `MESHPINCER_REPEATER_LOGIN_TIMEOUT` — bounded login response timeout
+  (default: 15 seconds)
+- `MESHPINCER_REPEATER_LOGIN_GLOBAL_COOLDOWN` and
+  `MESHPINCER_REPEATER_LOGIN_PEER_COOLDOWN` — minimum seconds between login
+  attempts globally and to the same repeater (defaults: 30 and 60)
 - `MESHPINCER_RETENTION_DAYS` — full-history retention window (default: 30)
 - `MESHPINCER_MAX_MESSAGES` — bounded message-row target (default: 50000)
 - `MESHPINCER_CURSOR_MAX_IDLE_DAYS` — idle interval before a consumer cursor
@@ -54,6 +59,8 @@ Implemented endpoints:
 - `POST /v1/database/housekeeping` (dry-run by default)
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
+- `POST /v1/repeaters/{public_key}/login`
+- `GET /v1/repeaters/{public_key}/status`
 
 The daemon auto-fetches direct and channel messages while connected. It writes
 each normalized inbound message and its `message.received` event atomically,
@@ -87,5 +94,17 @@ allowlist. Slot 0 (`Public`) is read-only. A successful companion submission is
 recorded as `transmitted`; MeshPincer never labels a channel broadcast
 `acknowledged` because the protocol provides no end-to-end channel ACK.
 
-The API never returns channel secrets, USB hardware serials, or stored contact
+Authenticate this companion to a known repeater without exposing the password
+in shell history or process arguments:
+
+```bash
+uv run meshpincer-repeater-login <64-hex-repeater-public-key>
+```
+
+The CLI prompts with hidden input and submits the password only to the local
+Unix-socket API. The daemon sends one login request, accepts success or rejection
+only from the requested repeater prefix, applies 30-second global and 60-second
+per-repeater cooldowns, and records only credential-free audit metadata.
+
+The API never returns passwords, channel secrets, USB hardware serials, or stored contact
 coordinates.

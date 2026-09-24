@@ -144,9 +144,11 @@ Read-only repeater status is implemented as one bounded request to an exact,
 known repeater public key. The daemon validates the contact type, records the
 outcome durably, and enforces a 30-second global cooldown plus a 60-second
 per-repeater cooldown. It never polls automatically or retries a timed-out
-request. Authenticated repeater
-configuration remains disabled until its read/change/read-back path is
-implemented and hardware-proven.
+request. One-time repeater authentication is available through the local-only
+login endpoint and hidden-input CLI. The login sends exactly once, correlates
+success or rejection to the requested repeater prefix, and never stores or logs
+the credential. Authenticated repeater configuration remains disabled until its
+read/change/read-back path is implemented and hardware-proven.
 
 The contact and private-channel management endpoints are intentionally local
 administrative APIs on the Unix socket, not general-purpose OpenClaw agent

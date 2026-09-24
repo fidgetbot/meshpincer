@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class DeliveryState(StrEnum):
@@ -19,6 +19,26 @@ class DeliveryState(StrEnum):
 class RepeaterStatusTransport(StrEnum):
     BINARY = "binary"
     LEGACY = "legacy"
+
+
+class RepeaterLoginRequest(BaseModel):
+    password: SecretStr = Field(repr=False)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value().encode("utf-8")) > 15:
+            raise ValueError("repeater password must be at most 15 UTF-8 bytes")
+        return value
+
+
+class RepeaterLoginResult(BaseModel):
+    public_key: str
+    name: str
+    path_length: int | None = None
+    permissions: int | None = None
+    is_admin: bool = False
+    authenticated_at: datetime
 
 
 class RadioStatus(BaseModel):

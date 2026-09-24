@@ -79,6 +79,7 @@ Initial endpoints:
 - `PUT /v1/consumers/{consumer_id}/cursor`
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
+- `POST /v1/repeaters/{public_key}/login`
 - `GET /v1/repeaters/{public_key}/status`
 - `PATCH /v1/repeaters/{public_key}/config`
 
@@ -258,7 +259,12 @@ The status endpoint exposes typed `binary` and `legacy` transports under the sam
 identity checks, serialized radio ownership, timeout, cooldowns, and durable audit.
 It remains hidden from the live agent tool profile
 until a controlled repeater is identified and the first hardware query is
-explicitly authorized. Authenticated configuration remains unimplemented
+explicitly authorized. Repeater login is implemented as one exact-key request
+with success/failure correlation to that repeater's six-byte prefix. Credentials
+are accepted only by the local Unix-socket request, represented as secret values,
+and omitted from logs, responses, SQLite, and audit payloads. A local `getpass`
+CLI permits one-time registration without placing the password in chat, shell
+history, or process arguments. Authenticated configuration remains unimplemented
 pending its read/change/read-back proof.
 
 ### M3 — native channel

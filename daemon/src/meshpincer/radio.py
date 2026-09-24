@@ -22,6 +22,7 @@ from .models import (
     RadioProfile,
     RadioStatus,
     RadioTelemetry,
+    RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
 )
@@ -85,6 +86,13 @@ class RadioBackend(Protocol):
         transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
     ) -> Mapping[str, Any] | None: ...
 
+    async def login_repeater(
+        self,
+        public_key: str,
+        password: str,
+        timeout: float,
+    ) -> Mapping[str, Any] | None: ...
+
     async def disconnect(self) -> None: ...
 
 
@@ -103,6 +111,10 @@ class DirectSendOutcome:
 
 
 class SendPolicyError(ValueError):
+    pass
+
+
+class RepeaterLoginDenied(PermissionError):
     pass
 
 
@@ -451,6 +463,45 @@ class MeshCoreBackend:
         finally:
             subscription.unsubscribe()
 
+    async def login_repeater(
+        self,
+        public_key: str,
+        password: str,
+        timeout: float,
+    ) -> Mapping[str, Any] | None:
+        requested_prefix = public_key[:12].lower()
+        loop = asyncio.get_running_loop()
+        response: asyncio.Future[Mapping[str, Any]] = loop.create_future()
+
+        def capture_response(event: Any, *, succeeded: bool) -> None:
+            payload = event.payload if isinstance(event.payload, Mapping) else {}
+            event_prefix = str(
+                event.attributes.get("pubkey_prefix") or payload.get("pubkey_prefix") or ""
+            ).lower()
+            if event_prefix == requested_prefix and not response.done():
+                response.set_result({**payload, "_login_succeeded": succeeded})
+
+        success_subscription = self.client.subscribe(
+            EventType.LOGIN_SUCCESS,
+            lambda event: capture_response(event, succeeded=True),
+        )
+        failed_subscription = self.client.subscribe(
+            EventType.LOGIN_FAILED,
+            lambda event: capture_response(event, succeeded=False),
+        )
+        try:
+            _event_payload(
+                await self.client.commands.send_login(public_key, password),
+                "repeater login request",
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(response), timeout=timeout)
+            except TimeoutError:
+                return None
+        finally:
+            success_subscription.unsubscribe()
+            failed_subscription.unsubscribe()
+
     async def stop_receiving(self) -> None:
         if self._receiving:
             await self.client.stop_auto_message_fetching()
@@ -517,6 +568,8 @@ class RadioManager:
         self._last_channel_send_by_index: dict[int, float] = {}
         self._last_repeater_status = float("-inf")
         self._last_repeater_status_by_peer: dict[str, float] = {}
+        self._last_repeater_login = float("-inf")
+        self._last_repeater_login_by_peer: dict[str, float] = {}
 
     async def start(self) -> None:
         if self._task is None:
@@ -822,6 +875,59 @@ class RadioManager:
                 receive_airtime=payload.get("rx_airtime"),
                 receive_errors=payload.get("recv_errors"),
                 requested_at=datetime.now(UTC),
+            )
+
+    async def login_repeater(self, public_key: str, password: str) -> RepeaterLoginResult:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            async with self._lock:
+                backend = self._backend
+                connected = self._status.connected
+                contact = next(
+                    (item for item in self._contacts if item.public_key.lower() == normalized_key),
+                    None,
+                )
+            if not connected or backend is None:
+                raise ConnectionError("MeshCore radio is not connected")
+            if contact is None:
+                raise ValueError("repeater is not a known contact")
+            if contact.node_type != 2:
+                raise ValueError("contact is not a repeater")
+
+            now = asyncio.get_running_loop().time()
+            global_remaining = (
+                self._last_repeater_login
+                + self.settings.repeater_login_global_cooldown_seconds
+                - now
+            )
+            peer_remaining = (
+                self._last_repeater_login_by_peer.get(normalized_key, float("-inf"))
+                + self.settings.repeater_login_peer_cooldown_seconds
+                - now
+            )
+            remaining = max(global_remaining, peer_remaining)
+            if remaining > 0:
+                raise SendPolicyError(f"repeater-login cooldown active for {remaining:.1f}s")
+
+            self._last_repeater_login = now
+            self._last_repeater_login_by_peer[normalized_key] = now
+            payload = await backend.login_repeater(
+                normalized_key,
+                password,
+                self.settings.repeater_login_timeout_seconds,
+            )
+            if payload is None:
+                raise TimeoutError("repeater did not return a login result before the timeout")
+            if not payload.get("_login_succeeded", False):
+                raise RepeaterLoginDenied("repeater rejected the credential")
+
+            return RepeaterLoginResult(
+                public_key=normalized_key,
+                name=contact.name,
+                path_length=contact.path_length,
+                permissions=payload.get("permissions"),
+                is_admin=bool(payload.get("is_admin", False)),
+                authenticated_at=datetime.now(UTC),
             )
 
     async def _run(self) -> None:

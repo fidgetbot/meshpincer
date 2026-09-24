@@ -12,10 +12,11 @@ from meshpincer.models import (
     ContactRouteMode,
     InboundMessage,
     RadioStatus,
+    RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
 )
-from meshpincer.radio import DirectSendOutcome
+from meshpincer.radio import DirectSendOutcome, RepeaterLoginDenied
 from meshpincer.store import Store
 
 
@@ -163,6 +164,18 @@ class FakeRadioManager:
             packets_sent=50,
             uptime_seconds=3600,
             requested_at="2026-09-21T08:00:00Z",
+        )
+
+    async def login_repeater(self, public_key: str, password: str) -> RepeaterLoginResult:
+        assert public_key == "ab" * 32
+        assert password == "guest-pass"
+        return RepeaterLoginResult(
+            public_key=public_key,
+            name="Test repeater",
+            path_length=0,
+            permissions=0,
+            is_admin=False,
+            authenticated_at="2026-09-23T18:00:00Z",
         )
 
 
@@ -615,3 +628,66 @@ async def test_repeater_status_selects_and_audits_legacy_transport(
     assert response.status_code == 200
     assert response.json()["transport"] == "legacy"
     assert events.json()[0]["payload"]["transport"] == "legacy"
+
+
+@pytest.mark.asyncio
+async def test_repeater_login_records_success_without_secret(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/v1/repeaters/{'ab' * 32}/login",
+                json={"password": "guest-pass"},
+            )
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json()["is_admin"] is False
+    serialized_events = events.text
+    assert "guest-pass" not in serialized_events
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.login.requested",
+        "repeater.login.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_login_records_denial_without_secret(settings: Settings) -> None:
+    radio = FakeRadioManager()
+
+    async def denied(_public_key: str, password: str) -> RepeaterLoginResult:
+        assert password == "wrong"
+        raise RepeaterLoginDenied("repeater rejected the credential")
+
+    radio.login_repeater = denied  # type: ignore[method-assign]
+    app = create_app(settings, radio_manager=radio)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/v1/repeaters/{'ab' * 32}/login",
+                json={"password": "wrong"},
+            )
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 401
+    assert "wrong" not in events.text
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.login.requested",
+        "repeater.login.denied",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_login_rejects_password_over_fifteen_bytes(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/v1/repeaters/{'ab' * 32}/login",
+                json={"password": "x" * 16},
+            )
+
+    assert response.status_code == 422
