@@ -59,6 +59,7 @@ Implemented endpoints:
 - `POST /v1/database/housekeeping` (dry-run by default)
 - `POST /v1/messages/direct`
 - `POST /v1/messages/channel`
+- `POST /v1/advertisements/local`
 - `POST /v1/repeaters/{public_key}/login`
 - `GET /v1/repeaters/{public_key}/status`
 
@@ -105,6 +106,10 @@ The CLI prompts with hidden input and submits the password only to the local
 Unix-socket API. The daemon sends one login request, accepts success or rejection
 only from the requested repeater prefix, applies 30-second global and 60-second
 per-repeater cooldowns, and records only credential-free audit metadata.
+
+For initial repeater registration, dual local advertisements, ACL permissions,
+and bounded status verification, follow
+[`docs/repeater-pairing.md`](../docs/repeater-pairing.md).
 
 The API never returns passwords, channel secrets, USB hardware serials, or stored contact
 coordinates.

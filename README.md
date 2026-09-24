@@ -150,6 +150,12 @@ success or rejection to the requested repeater prefix, and never stores or logs
 the credential. Authenticated repeater configuration remains disabled until its
 read/change/read-back path is implemented and hardware-proven.
 
+Pairing a new repeater-management relationship requires both route/identity
+visibility and ACL registration. Follow the complete, hardware-proven
+[`docs/repeater-pairing.md`](docs/repeater-pairing.md) procedure; do not treat an
+advertisement, `setperm` acknowledgement, or login transmission by itself as
+proof of pairing.
+
 The contact and private-channel management endpoints are intentionally local
 administrative APIs on the Unix socket, not general-purpose OpenClaw agent
 tools. Channel secrets are accepted only for a set operation and are never

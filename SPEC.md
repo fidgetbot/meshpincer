@@ -160,6 +160,12 @@ serialized daemon ownership, with a 60-second in-process cooldown and durable
 requested/accepted/failure events. Acceptance is not delivery confirmation.
 There is no flood option, automatic schedule, or retry.
 
+Repeater pairing is an explicit operator workflow documented in
+[`docs/repeater-pairing.md`](docs/repeater-pairing.md): advertise both sides
+locally, register the companion's full public key in the repeater ACL, then
+require one correlated bounded status response. The proven hardware sequence
+does not establish that either advertisement is independently necessary.
+
 Local status includes the companion RTC time and its offset from the host, read
 without changing the device clock. Repeater status requests count generic binary
 and parsed status responses during their bounded wait; missing matching status

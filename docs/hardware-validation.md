@@ -1,5 +1,24 @@
 # Hardware validation
 
+## Repeater pairing and status — 2026-09-23
+
+The companion was registered in a known repeater's ACL through an authenticated
+admin companion. Remote `setperm` returned `OK`, but repeated bounded status
+requests and one hidden-input login request initially timed out despite normal
+direct messaging and live Public-channel reception.
+
+MeshPincer then sent one local zero-hop self advertisement, while the operator
+also sent one advertisement from the repeater. The next single binary status
+request succeeded and was correlated by its request tag. The repeater returned
+a 4.179 V battery reading, an empty transmit queue, and 11.5 dB last SNR. No
+automatic retry, flood advertisement, clock mutation, or additional ACL change
+was performed.
+
+This validates the combined dual-advertisement plus ACL-registration pairing
+procedure. It does not isolate which advertisement was necessary because both
+occurred before the successful request. The reproducible operational procedure
+is recorded in [`repeater-pairing.md`](repeater-pairing.md).
+
 ## Wio Tracker L1 Pro — 2026-09-20
 
 The first read-only hardware inventory was performed against a Wio Tracker L1
