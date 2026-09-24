@@ -1253,6 +1253,25 @@ async def test_read_status_reads_clock_without_setting_it() -> None:
     assert calls.count("get_time") == 1
 
 
+async def test_local_advert_is_zero_hop_and_rate_limited(tmp_path: Path) -> None:
+    calls = []
+
+    async def send_advert(*, flood):
+        calls.append(flood)
+        return Event(EventType.OK, {})
+
+    backend = MeshCoreBackend(
+        SimpleNamespace(commands=SimpleNamespace(send_advert=send_advert)), timeout=5
+    )
+    manager = RadioManager(Settings(state_dir=tmp_path, socket_path=tmp_path / "test.sock"))
+    manager._backend = backend
+    manager._status.connected = True
+    await manager.advertise_local()
+    with pytest.raises(SendPolicyError):
+        await manager.advertise_local()
+    assert calls == [False]
+
+
 async def test_meshcore_backend_correlates_untagged_status_by_requested_peer() -> None:
     callback = None
 

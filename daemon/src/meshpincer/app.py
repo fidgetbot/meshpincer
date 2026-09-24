@@ -475,6 +475,20 @@ def create_app(
             ack_code=None,
         )
 
+    @app.post("/v1/advertisements/local")
+    async def advertise_local() -> dict[str, str]:
+        await store.append_event("advertisement.local.requested", {})
+        try:
+            await radio.advertise_local()
+        except SendPolicyError as exc:
+            await store.append_event("advertisement.local.rate_limited", {})
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event("advertisement.local.failed", {})
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("advertisement.local.accepted", {})
+        return {"status": "accepted", "route": "zero_hop"}
+
     @app.get("/v1/repeaters/{public_key}/status", response_model=RepeaterStatus)
     async def repeater_status(
         public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),

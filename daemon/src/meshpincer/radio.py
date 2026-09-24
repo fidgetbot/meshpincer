@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 
 class RadioBackend(Protocol):
+    async def advertise_local(self) -> None: ...
+
     async def read_status(self) -> tuple[dict[str, Any], int]: ...
 
     async def read_contacts(self) -> Sequence[Mapping[str, Any]]: ...
@@ -134,6 +136,9 @@ def _event_payload(event: Any, operation: str) -> dict[str, Any]:
 
 
 class MeshCoreBackend:
+    async def advertise_local(self) -> None:
+        _event_payload(await self.client.commands.send_advert(flood=False), "local advertisement")
+
     def __init__(self, client: MeshCore, timeout: float) -> None:
         self.client = client
         self.timeout = timeout
@@ -590,6 +595,16 @@ class RadioManager:
         self._last_repeater_status_by_peer: dict[str, float] = {}
         self._last_repeater_login = float("-inf")
         self._last_repeater_login_by_peer: dict[str, float] = {}
+        self._last_local_advert = float("-inf")
+
+    async def advertise_local(self) -> None:
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            now = asyncio.get_running_loop().time()
+            if now - self._last_local_advert < 60:
+                raise SendPolicyError("local advertisement cooldown active")
+            self._last_local_advert = now
+            await backend.advertise_local()
 
     async def start(self) -> None:
         if self._task is None:

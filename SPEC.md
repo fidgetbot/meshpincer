@@ -155,6 +155,11 @@ four-byte ACK code returned by the companion protocol.
 
 ## Agent airtime and safety policy
 
+`POST /v1/advertisements/local` requests one zero-hop self advertisement under
+serialized daemon ownership, with a 60-second in-process cooldown and durable
+requested/accepted/failure events. Acceptance is not delivery confirmation.
+There is no flood option, automatic schedule, or retry.
+
 Local status includes the companion RTC time and its offset from the host, read
 without changing the device clock. Repeater status requests count generic binary
 and parsed status responses during their bounded wait; missing matching status
