@@ -10,7 +10,7 @@ from meshcore.events import Event, EventType
 
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
-from meshpincer.models import ContactRouteMode, InboundMessage
+from meshpincer.models import ContactRouteMode, InboundMessage, RepeaterStatusTransport
 from meshpincer.radio import DirectSendOutcome, MeshCoreBackend, RadioManager, SendPolicyError
 from meshpincer.store import Store
 
@@ -184,7 +184,12 @@ class FakeBackend:
         self.channel_sent.append((channel_index, text))
         await on_transmitted()
 
-    async def request_repeater_status(self, public_key: str, timeout: float):
+    async def request_repeater_status(
+        self,
+        public_key: str,
+        timeout: float,
+        transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
+    ):
         self.repeater_status_requests.append((public_key, timeout))
         return {
             "bat": 4095,
@@ -1185,3 +1190,50 @@ async def test_meshcore_backend_rejects_untagged_status_from_other_peer() -> Non
     backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
 
     assert await backend.request_repeater_status("ab" * 32, timeout=11) is None
+
+
+async def test_meshcore_backend_requests_legacy_status_once_by_peer_prefix() -> None:
+    callback = None
+
+    class FakeSubscription:
+        def unsubscribe(self) -> None:
+            pass
+
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def send_statusreq(self, public_key: str):
+            self.calls.append(public_key)
+            assert callback is not None
+            callback(
+                Event(
+                    EventType.STATUS_RESPONSE,
+                    {"pubkey_pre": "ab" * 6, "bat": 4200},
+                    {"pubkey_prefix": "ab" * 6},
+                )
+            )
+            return Event(EventType.MSG_SENT, {"suggested_timeout": 4000})
+
+    def subscribe(event_type, event_callback):
+        nonlocal callback
+        assert event_type is EventType.STATUS_RESPONSE
+        callback = event_callback
+        return FakeSubscription()
+
+    commands = FakeCommands()
+    client = SimpleNamespace(commands=commands, subscribe=subscribe)
+    backend = MeshCoreBackend(client, timeout=5.0)  # type: ignore[arg-type]
+
+    result = await backend.request_repeater_status(
+        "ab" * 32,
+        timeout=11,
+        transport=RepeaterStatusTransport.LEGACY,
+    )
+
+    assert commands.calls == ["ab" * 32]
+    assert result == {
+        "pubkey_pre": "ab" * 6,
+        "bat": 4200,
+        "_response_correlation": "peer_prefix",
+    }

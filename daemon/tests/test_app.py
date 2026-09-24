@@ -13,6 +13,7 @@ from meshpincer.models import (
     InboundMessage,
     RadioStatus,
     RepeaterStatus,
+    RepeaterStatusTransport,
 )
 from meshpincer.radio import DirectSendOutcome
 from meshpincer.store import Store
@@ -146,12 +147,17 @@ class FakeRadioManager:
         assert text == "Fidget: private send"
         await on_transmitted()
 
-    async def request_repeater_status(self, public_key: str) -> RepeaterStatus:
+    async def request_repeater_status(
+        self,
+        public_key: str,
+        transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
+    ) -> RepeaterStatus:
         assert public_key == "ab" * 32
         return RepeaterStatus(
             public_key=public_key,
             name="Test repeater",
             path_length=1,
+            transport=transport,
             battery_mv=4100,
             packets_received=100,
             packets_sent=50,
@@ -546,6 +552,7 @@ async def test_repeater_status_records_one_request_and_success(settings: Setting
     assert response.status_code == 200
     assert response.json()["name"] == "Test repeater"
     assert response.json()["battery_mv"] == 4100
+    assert response.json()["transport"] == "binary"
     assert [event["kind"] for event in events.json()] == [
         "repeater.status.requested",
         "repeater.status.succeeded",
@@ -570,7 +577,10 @@ async def test_repeater_status_records_timeout_without_retry(settings: Settings)
     radio = FakeRadioManager()
     calls = 0
 
-    async def timed_out(_public_key: str) -> RepeaterStatus:
+    async def timed_out(
+        _public_key: str,
+        _transport: RepeaterStatusTransport,
+    ) -> RepeaterStatus:
         nonlocal calls
         calls += 1
         raise TimeoutError("repeater did not return status before the timeout")
@@ -589,3 +599,19 @@ async def test_repeater_status_records_timeout_without_retry(settings: Settings)
         "repeater.status.requested",
         "repeater.status.timed_out",
     ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_status_selects_and_audits_legacy_transport(
+    settings: Settings,
+) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/v1/repeaters/{'ab' * 32}/status?transport=legacy")
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json()["transport"] == "legacy"
+    assert events.json()[0]["payload"]["transport"] == "legacy"

@@ -16,6 +16,11 @@ class DeliveryState(StrEnum):
     FAILED = "failed"
 
 
+class RepeaterStatusTransport(StrEnum):
+    BINARY = "binary"
+    LEGACY = "legacy"
+
+
 class RadioStatus(BaseModel):
     connected: bool = False
     serial_port: str | None = None
@@ -137,6 +142,7 @@ class RepeaterStatus(BaseModel):
     public_key: str
     name: str
     path_length: int | None = None
+    transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY
     response_correlation: Literal["request_tag", "peer_prefix"] = "request_tag"
     battery_mv: int | None = None
     tx_queue_length: int | None = None

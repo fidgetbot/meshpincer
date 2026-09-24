@@ -163,12 +163,16 @@ export const toolEntry = defineToolPlugin({
         "Send one rate-limited status request to a known MeshCore repeater.",
       parameters: Type.Object({
         publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+        transport: Type.Optional(
+          Type.Union([Type.Literal("binary"), Type.Literal("legacy")]),
+        ),
       }),
-      execute: async ({ publicKey }, config) => {
+      execute: async ({ publicKey, transport }, config) => {
         const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        const query = transport ? `?transport=${encodeURIComponent(transport)}` : "";
         return {
           response: await client.get(
-            `/v1/repeaters/${encodeURIComponent(publicKey)}/status`,
+            `/v1/repeaters/${encodeURIComponent(publicKey)}/status${query}`,
           ),
         };
       },

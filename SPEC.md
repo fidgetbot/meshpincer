@@ -254,6 +254,8 @@ plus per-repeater cooldowns (30 seconds globally and 60 seconds per repeater).
 Tagged status responses are preferred; legacy untagged response frames are
 accepted only when their six-byte public-key prefix exactly matches the requested
 repeater during that serialized request, and the API reports the correlation mode.
+The status endpoint exposes typed `binary` and `legacy` transports under the same
+identity checks, serialized radio ownership, timeout, cooldowns, and durable audit.
 It remains hidden from the live agent tool profile
 until a controlled repeater is identified and the first hardware query is
 explicitly authorized. Authenticated configuration remains unimplemented

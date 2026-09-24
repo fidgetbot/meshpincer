@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Path, Query
 
@@ -22,6 +23,7 @@ from .models import (
     RenameChannelRequest,
     RepeaterConfigRequest,
     RepeaterStatus,
+    RepeaterStatusTransport,
     SendMessageRequest,
     SendMessageResult,
     ServiceStatus,
@@ -474,14 +476,15 @@ def create_app(
     @app.get("/v1/repeaters/{public_key}/status", response_model=RepeaterStatus)
     async def repeater_status(
         public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+        transport: Annotated[RepeaterStatusTransport, Query()] = (RepeaterStatusTransport.BINARY),
     ) -> RepeaterStatus:
         normalized_key = public_key.lower()
         await store.append_event(
             "repeater.status.requested",
-            {"public_key": normalized_key},
+            {"public_key": normalized_key, "transport": transport.value},
         )
         try:
-            result = await radio.request_repeater_status(normalized_key)
+            result = await radio.request_repeater_status(normalized_key, transport)
         except SendPolicyError as exc:
             await store.append_event(
                 "repeater.status.rate_limited",

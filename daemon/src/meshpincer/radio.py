@@ -23,6 +23,7 @@ from .models import (
     RadioStatus,
     RadioTelemetry,
     RepeaterStatus,
+    RepeaterStatusTransport,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class RadioBackend(Protocol):
         self,
         public_key: str,
         timeout: float,
+        transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
     ) -> Mapping[str, Any] | None: ...
 
     async def disconnect(self) -> None: ...
@@ -409,6 +411,7 @@ class MeshCoreBackend:
         self,
         public_key: str,
         timeout: float,
+        transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
     ) -> Mapping[str, Any] | None:
         requested_prefix = public_key[:12].lower()
         loop = asyncio.get_running_loop()
@@ -424,6 +427,17 @@ class MeshCoreBackend:
 
         subscription = self.client.subscribe(EventType.STATUS_RESPONSE, capture_peer_response)
         try:
+            if transport is RepeaterStatusTransport.LEGACY:
+                _event_payload(
+                    await self.client.commands.send_statusreq(public_key),
+                    "legacy repeater status request",
+                )
+                try:
+                    payload = await asyncio.wait_for(asyncio.shield(peer_response), timeout=timeout)
+                except TimeoutError:
+                    return None
+                return {**payload, "_response_correlation": "peer_prefix"}
+
             payload = await self.client.commands.req_status_sync(public_key, timeout=timeout)
             if payload is not None:
                 return {**payload, "_response_correlation": "request_tag"}
@@ -737,7 +751,11 @@ class RadioManager:
 
             await backend.send_channel(channel_index, text, mark_transmitted)
 
-    async def request_repeater_status(self, public_key: str) -> RepeaterStatus:
+    async def request_repeater_status(
+        self,
+        public_key: str,
+        transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
+    ) -> RepeaterStatus:
         normalized_key = public_key.lower()
         async with self._operation_lock:
             async with self._lock:
@@ -774,6 +792,7 @@ class RadioManager:
             payload = await backend.request_repeater_status(
                 normalized_key,
                 self.settings.repeater_status_timeout_seconds,
+                transport,
             )
             if payload is None:
                 raise TimeoutError("repeater did not return status before the timeout")
@@ -782,6 +801,7 @@ class RadioManager:
                 public_key=normalized_key,
                 name=contact.name,
                 path_length=contact.path_length,
+                transport=transport,
                 response_correlation=payload.get("_response_correlation", "request_tag"),
                 battery_mv=payload.get("bat"),
                 tx_queue_length=payload.get("tx_queue_len"),
