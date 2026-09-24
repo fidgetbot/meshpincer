@@ -34,6 +34,10 @@ Configuration is supplied with environment variables:
 - `MESHPINCER_REPEATER_LOGIN_GLOBAL_COOLDOWN` and
   `MESHPINCER_REPEATER_LOGIN_PEER_COOLDOWN` — minimum seconds between login
   attempts globally and to the same repeater (defaults: 30 and 60)
+- `MESHPINCER_REPEATER_ACL_TIMEOUT` — bounded ACL response timeout (default: 15)
+- `MESHPINCER_REPEATER_ACL_GLOBAL_COOLDOWN` and
+  `MESHPINCER_REPEATER_ACL_PEER_COOLDOWN` — minimum seconds between ACL reads
+  globally and to the same repeater (defaults: 30 and 60)
 - `MESHPINCER_RETENTION_DAYS` — full-history retention window (default: 30)
 - `MESHPINCER_MAX_MESSAGES` — bounded message-row target (default: 50000)
 - `MESHPINCER_CURSOR_MAX_IDLE_DAYS` — idle interval before a consumer cursor
@@ -62,6 +66,7 @@ Implemented endpoints:
 - `POST /v1/advertisements/local`
 - `POST /v1/repeaters/{public_key}/login`
 - `GET /v1/repeaters/{public_key}/status`
+- `GET /v1/repeaters/{public_key}/acl`
 
 The daemon auto-fetches direct and channel messages while connected. It writes
 each normalized inbound message and its `message.received` event atomically,

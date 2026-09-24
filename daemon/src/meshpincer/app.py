@@ -21,6 +21,7 @@ from .models import (
     HousekeepingResult,
     MessageRecord,
     RenameChannelRequest,
+    RepeaterAcl,
     RepeaterConfigRequest,
     RepeaterLoginRequest,
     RepeaterLoginResult,
@@ -530,6 +531,39 @@ def create_app(
             "repeater.status.succeeded",
             result.model_dump(mode="json"),
         )
+        return result
+
+    @app.get("/v1/repeaters/{public_key}/acl", response_model=RepeaterAcl)
+    async def repeater_acl(
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterAcl:
+        normalized_key = public_key.lower()
+        await store.append_event("repeater.acl.requested", {"public_key": normalized_key})
+        try:
+            result = await radio.request_repeater_acl(normalized_key)
+        except SendPolicyError as exc:
+            await store.append_event(
+                "repeater.acl.rate_limited",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event(
+                "repeater.acl.rejected",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event("repeater.acl.timed_out", {"public_key": normalized_key})
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event(
+                "repeater.acl.failed",
+                {"public_key": normalized_key, "reason": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        await store.append_event("repeater.acl.succeeded", result.model_dump(mode="json"))
         return result
 
     @app.post("/v1/repeaters/{public_key}/login", response_model=RepeaterLoginResult)

@@ -12,6 +12,8 @@ from meshpincer.models import (
     ContactRouteMode,
     InboundMessage,
     RadioStatus,
+    RepeaterAcl,
+    RepeaterAclEntry,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -176,6 +178,16 @@ class FakeRadioManager:
             permissions=0,
             is_admin=False,
             authenticated_at="2026-09-23T18:00:00Z",
+        )
+
+    async def request_repeater_acl(self, public_key: str) -> RepeaterAcl:
+        assert public_key == "ab" * 32
+        return RepeaterAcl(
+            public_key=public_key,
+            name="Test repeater",
+            path_length=0,
+            entries=[RepeaterAclEntry(public_key_prefix="12" * 6, permissions=2)],
+            requested_at="2026-09-24T18:00:00Z",
         )
 
 
@@ -569,6 +581,23 @@ async def test_repeater_status_records_one_request_and_success(settings: Setting
     assert [event["kind"] for event in events.json()] == [
         "repeater.status.requested",
         "repeater.status.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_acl_records_one_read_and_success(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/v1/repeaters/{'ab' * 32}/acl")
+            events = await client.get("/v1/events")
+
+    assert response.status_code == 200
+    assert response.json()["entries"] == [{"public_key_prefix": "12" * 6, "permissions": 2}]
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.acl.requested",
+        "repeater.acl.succeeded",
     ]
 
 

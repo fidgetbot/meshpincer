@@ -12,6 +12,7 @@ describe("meshpincer", () => {
       "meshcore_channels",
       "meshcore_send",
       "meshcore_repeater_status",
+      "meshcore_repeater_acl",
       "meshcore_repeater_configure",
     ]);
   });

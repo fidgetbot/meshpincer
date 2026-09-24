@@ -32,6 +32,7 @@ class FakeBackend:
         self.channel_one_name = ""
         self.channel_sent: list[tuple[int, str]] = []
         self.repeater_status_requests: list[tuple[str, float]] = []
+        self.repeater_acl_requests: list[tuple[str, float]] = []
         self.repeater_login_requests: list[tuple[str, str, float]] = []
         self.contact_records: dict[str, dict[str, Any]] = {
             "34" * 32: {
@@ -226,6 +227,10 @@ class FakeBackend:
             "is_admin": False,
             "_login_succeeded": True,
         }
+
+    async def request_repeater_acl(self, public_key: str, timeout: float):
+        self.repeater_acl_requests.append((public_key, timeout))
+        return [{"key": "12" * 6, "perm": 2}]
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -897,6 +902,54 @@ async def test_manager_rejects_non_repeater_status_target_without_transmit(
         await manager.stop()
 
     assert backend.repeater_status_requests == []
+
+
+async def test_manager_requests_repeater_acl_once_and_rate_limits(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_acl_timeout_seconds=7,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        acl = await manager.request_repeater_acl("34" * 32)
+        with pytest.raises(SendPolicyError, match="cooldown"):
+            await manager.request_repeater_acl("34" * 32)
+    finally:
+        await manager.stop()
+
+    assert backend.repeater_acl_requests == [("34" * 32, 7)]
+    assert acl.entries[0].public_key_prefix == "12" * 6
+    assert acl.entries[0].permissions == 2
+
+
+async def test_meshcore_backend_requests_repeater_acl_once() -> None:
+    class FakeCommands:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def req_acl_sync(self, public_key: str, timeout: float):
+            self.calls.append((public_key, timeout))
+            return [{"key": "ab" * 6, "perm": 3}]
+
+    commands = FakeCommands()
+    backend = MeshCoreBackend(SimpleNamespace(commands=commands), timeout=5)
+    result = await backend.request_repeater_acl("cd" * 32, timeout=11)
+    assert commands.calls == [("cd" * 32, 11)]
+    assert result == [{"key": "ab" * 6, "perm": 3}]
 
 
 async def test_manager_logs_into_one_known_repeater_and_rate_limits(tmp_path: Path) -> None:

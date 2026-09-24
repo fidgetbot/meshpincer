@@ -41,6 +41,9 @@ class Settings:
     repeater_status_timeout_seconds: float = 15.0
     repeater_status_global_cooldown_seconds: float = 30.0
     repeater_status_peer_cooldown_seconds: float = 60.0
+    repeater_acl_timeout_seconds: float = 15.0
+    repeater_acl_global_cooldown_seconds: float = 30.0
+    repeater_acl_peer_cooldown_seconds: float = 60.0
     repeater_login_timeout_seconds: float = 15.0
     repeater_login_global_cooldown_seconds: float = 30.0
     repeater_login_peer_cooldown_seconds: float = 60.0
@@ -99,6 +102,15 @@ class Settings:
             ),
             repeater_status_peer_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_STATUS_PEER_COOLDOWN", "60")
+            ),
+            repeater_acl_timeout_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_ACL_TIMEOUT", "15")
+            ),
+            repeater_acl_global_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_ACL_GLOBAL_COOLDOWN", "30")
+            ),
+            repeater_acl_peer_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_ACL_PEER_COOLDOWN", "60")
             ),
             repeater_login_timeout_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_LOGIN_TIMEOUT", "15")

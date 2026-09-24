@@ -187,6 +187,19 @@ class RepeaterStatus(BaseModel):
     requested_at: datetime
 
 
+class RepeaterAclEntry(BaseModel):
+    public_key_prefix: str = Field(pattern=r"^[0-9a-f]{12}$")
+    permissions: int = Field(ge=0, le=255)
+
+
+class RepeaterAcl(BaseModel):
+    public_key: str
+    name: str
+    path_length: int | None = None
+    entries: list[RepeaterAclEntry]
+    requested_at: datetime
+
+
 class DatabaseStatus(BaseModel):
     database_bytes: int = Field(ge=0)
     wal_bytes: int = Field(ge=0)

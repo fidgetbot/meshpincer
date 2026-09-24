@@ -51,6 +51,7 @@ operator-tool contracts:
 - `meshcore_channels`
 - `meshcore_send`
 - `meshcore_repeater_status`
+- `meshcore_repeater_acl`
 - `meshcore_repeater_configure`
 
 The same package provides the `meshcore` messaging channel using the daemon API
@@ -81,6 +82,7 @@ Initial endpoints:
 - `POST /v1/messages/channel`
 - `POST /v1/repeaters/{public_key}/login`
 - `GET /v1/repeaters/{public_key}/status`
+- `GET /v1/repeaters/{public_key}/acl`
 - `PATCH /v1/repeaters/{public_key}/config`
 
 The API is local-only. It must not bind a TCP listener by default.
@@ -274,15 +276,18 @@ accepted only when their six-byte public-key prefix exactly matches the requeste
 repeater during that serialized request, and the API reports the correlation mode.
 The status endpoint exposes typed `binary` and `legacy` transports under the same
 identity checks, serialized radio ownership, timeout, cooldowns, and durable audit.
-It remains hidden from the live agent tool profile
-until a controlled repeater is identified and the first hardware query is
-explicitly authorized. Repeater login is implemented as one exact-key request
+Its first tagged hardware response is proven after the documented dual-local-
+advertisement and ACL-registration sequence. Repeater login is implemented as one exact-key request
 with success/failure correlation to that repeater's six-byte prefix. Credentials
 are accepted only by the local Unix-socket request, represented as secret values,
 and omitted from logs, responses, SQLite, and audit payloads. A local `getpass`
 CLI permits one-time registration without placing the password in chat, shell
-history, or process arguments. Authenticated configuration remains unimplemented
-pending its read/change/read-back proof.
+history, or process arguments. Remote binary ACL inspection is implemented as
+one exact-key, admin-only request with independent global/per-repeater cooldowns,
+a bounded timeout, and credential-free durable audit. It returns only the
+six-byte key prefixes and permission bytes supplied by the repeater.
+Authenticated configuration remains unimplemented pending its
+read/change/read-back proof.
 
 ### M3 — native channel
 

@@ -178,6 +178,22 @@ export const toolEntry = defineToolPlugin({
       },
     }),
     tool({
+      name: "meshcore_repeater_acl",
+      description:
+        "Read one rate-limited ACL snapshot from a known MeshCore repeater. Requires repeater admin permission and returns only public-key prefixes and permission bytes.",
+      parameters: Type.Object({
+        publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+      }),
+      execute: async ({ publicKey }, config) => {
+        const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        return {
+          response: await client.get(
+            `/v1/repeaters/${encodeURIComponent(publicKey)}/acl`,
+          ),
+        };
+      },
+    }),
+    tool({
       name: "meshcore_repeater_configure",
       description: "Apply validated settings to a known MeshCore repeater.",
       parameters: Type.Object({

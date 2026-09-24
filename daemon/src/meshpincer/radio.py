@@ -22,6 +22,8 @@ from .models import (
     RadioProfile,
     RadioStatus,
     RadioTelemetry,
+    RepeaterAcl,
+    RepeaterAclEntry,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -87,6 +89,12 @@ class RadioBackend(Protocol):
         timeout: float,
         transport: RepeaterStatusTransport = RepeaterStatusTransport.BINARY,
     ) -> Mapping[str, Any] | None: ...
+
+    async def request_repeater_acl(
+        self,
+        public_key: str,
+        timeout: float,
+    ) -> Sequence[Mapping[str, Any]] | None: ...
 
     async def login_repeater(
         self,
@@ -488,6 +496,13 @@ class MeshCoreBackend:
                     diagnostics,
                 )
 
+    async def request_repeater_acl(
+        self,
+        public_key: str,
+        timeout: float,
+    ) -> Sequence[Mapping[str, Any]] | None:
+        return await self.client.commands.req_acl_sync(public_key, timeout=timeout)
+
     async def login_repeater(
         self,
         public_key: str,
@@ -593,6 +608,8 @@ class RadioManager:
         self._last_channel_send_by_index: dict[int, float] = {}
         self._last_repeater_status = float("-inf")
         self._last_repeater_status_by_peer: dict[str, float] = {}
+        self._last_repeater_acl = float("-inf")
+        self._last_repeater_acl_by_peer: dict[str, float] = {}
         self._last_repeater_login = float("-inf")
         self._last_repeater_login_by_peer: dict[str, float] = {}
         self._last_local_advert = float("-inf")
@@ -909,6 +926,56 @@ class RadioManager:
                 flood_duplicates=payload.get("flood_dups"),
                 receive_airtime=payload.get("rx_airtime"),
                 receive_errors=payload.get("recv_errors"),
+                requested_at=datetime.now(UTC),
+            )
+
+    async def request_repeater_acl(self, public_key: str) -> RepeaterAcl:
+        normalized_key = public_key.lower()
+        async with self._operation_lock:
+            async with self._lock:
+                backend = self._backend
+                connected = self._status.connected
+                contact = next(
+                    (item for item in self._contacts if item.public_key.lower() == normalized_key),
+                    None,
+                )
+            if not connected or backend is None:
+                raise ConnectionError("MeshCore radio is not connected")
+            if contact is None:
+                raise ValueError("repeater is not a known contact")
+            if contact.node_type != 2:
+                raise ValueError("contact is not a repeater")
+
+            now = asyncio.get_running_loop().time()
+            remaining = max(
+                self._last_repeater_acl + self.settings.repeater_acl_global_cooldown_seconds - now,
+                self._last_repeater_acl_by_peer.get(normalized_key, float("-inf"))
+                + self.settings.repeater_acl_peer_cooldown_seconds
+                - now,
+            )
+            if remaining > 0:
+                raise SendPolicyError(f"repeater-ACL cooldown active for {remaining:.1f}s")
+
+            self._last_repeater_acl = now
+            self._last_repeater_acl_by_peer[normalized_key] = now
+            payload = await backend.request_repeater_acl(
+                normalized_key,
+                self.settings.repeater_acl_timeout_seconds,
+            )
+            if payload is None:
+                raise TimeoutError("repeater did not return ACL before the timeout")
+
+            return RepeaterAcl(
+                public_key=normalized_key,
+                name=contact.name,
+                path_length=contact.path_length,
+                entries=[
+                    RepeaterAclEntry(
+                        public_key_prefix=str(entry["key"]).lower(),
+                        permissions=int(entry["perm"]),
+                    )
+                    for entry in payload
+                ],
                 requested_at=datetime.now(UTC),
             )
 

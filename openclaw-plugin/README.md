@@ -18,13 +18,16 @@ the implemented operator tools to `tools.alsoAllow`:
       "meshcore_channels",
       "meshcore_send",
       "meshcore_repeater_status",
+      "meshcore_repeater_acl",
     ],
   },
 }
 ```
 
 Allow `meshcore_repeater_status` only after the daemon's bounded read-only
-status endpoint is deployed. Keep `meshcore_repeater_configure` hidden until
+status endpoint is deployed. `meshcore_repeater_acl` performs one bounded,
+admin-only binary ACL read and returns six-byte key prefixes plus permission
+bytes; it cannot mutate the ACL. Keep `meshcore_repeater_configure` hidden until
 its authenticated read/change/read-back workflow is implemented and verified.
 Plugin activation alone does not bypass OpenClaw's normal tool policy.
 
