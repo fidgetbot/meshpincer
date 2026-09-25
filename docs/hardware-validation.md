@@ -55,6 +55,21 @@ and are limited to idempotent typed operations. No arbitrary CLI, password,
 radio-profile, identity, coordinate, reboot, or destructive operation was
 exposed or attempted.
 
+After the three administration tools were loaded into the installed OpenClaw
+Gateway, the same reversible proof was repeated through the real agent tool
+boundary. A separate read first confirmed `0` on attempt one. The forward
+transaction then pre-read `0` on attempt three, set `60` on attempt two, and
+verified `60` on attempt one. After the enforced 120-second mutation cooldown,
+the rollback pre-read `60` on attempt two, restored `0` on attempt three, and
+verified `0` on attempt one. The temporary 60-minute interval was active for
+only about two minutes, so no scheduled advertisement could occur.
+
+This closes the configuration activation case: implementation, CI, daemon
+hardware behavior, OpenClaw tool registration, and live agent-boundary mutation
+have all been proven. ACL inspection is also hardware-proven; reversible ACL
+mutation of a separate test companion remains intentionally unproven. Public
+evidence omits full public keys and site-specific repeater identity.
+
 ## Wio Tracker L1 Pro — 2026-09-20
 
 The first read-only hardware inventory was performed against a Wio Tracker L1

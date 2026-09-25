@@ -157,8 +157,11 @@ zero-hop advert interval. Configuration performs a pre-read, one change, and a
 post-change read-back. Both mutation tools reject unknown/non-repeater targets,
 use independent cooldowns, and never expose arbitrary remote CLI. The daemon
 also refuses to change its own ACL entry, avoiding accidental loss of the
-administrative path. Live hardware mutation proof is tracked separately from
-local and CI validation.
+administrative path. The configuration transaction is hardware-proven both
+through the daemon API and through the installed OpenClaw agent tool boundary:
+each proof read the disabled value, temporarily set `60`, verified it, restored
+`0`, and independently verified the restoration before completion. The
+temporary interval was shorter than its first possible scheduled effect.
 The separate `meshcore_repeater_config_get` tool reads that setting without
 changing it.
 Typed remote CLI steps make at most three attempts after response timeouts,

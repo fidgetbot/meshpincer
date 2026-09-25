@@ -287,7 +287,7 @@ not advance the cursor implicitly; the OpenClaw agent acknowledges the last
 successfully processed event on its next call, preserving at-least-once replay
 if a turn fails between tool execution and response handling.
 
-Status as of 2026-09-20: the plugin is installed in an OpenClaw Gateway and the
+Status as of 2026-09-25: the plugin is installed in an OpenClaw Gateway and the
 live `meshcore_status` and cursor-backed `meshcore_messages` tools have been
 called successfully through the real agent tool boundary against the supervised
 daemon and attached Wio. The direct-send daemon path is hardware-proven with ACK
@@ -312,8 +312,17 @@ history, or process arguments. Remote binary ACL inspection is implemented as
 one exact-key, admin-only request with independent global/per-repeater cooldowns,
 a bounded timeout, and credential-free durable audit. It returns only the
 six-byte key prefixes and permission bytes supplied by the repeater.
-Authenticated configuration remains unimplemented pending its
-read/change/read-back proof.
+Typed authenticated administration is implemented without arbitrary remote CLI
+access. `meshcore_repeater_config_get` reads the local zero-hop advert interval;
+`meshcore_repeater_configure` performs a pre-read, exact-value change, and
+independent post-change read-back; and `meshcore_repeater_acl_set` changes
+another companion's exact ACL role and verifies it by binary ACL read-back. The
+daemon refuses self-ACL mutation. Idempotent remote-CLI steps use at most three
+fresh timestamp/tag attempts after timeouts and report their attempt counts.
+The configuration path has completed reversible `0 -> 60 -> 0` hardware proofs
+through both the daemon API and the real installed OpenClaw tool boundary, with
+the final read-back restoring the original disabled value. Live ACL mutation of
+a separate test companion remains the outstanding repeater-admin hardware case.
 
 ### M3 — native channel
 
