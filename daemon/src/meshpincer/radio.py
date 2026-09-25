@@ -102,8 +102,13 @@ class RadioBackend(Protocol):
     ) -> Sequence[Mapping[str, Any]] | None: ...
 
     async def run_repeater_command(
-        self, public_key: str, command: str, timeout: float
-    ) -> str | None: ...
+        self,
+        public_key: str,
+        command: str,
+        timeout: float,
+        max_attempts: int,
+        retry_delay: float,
+    ) -> RepeaterCommandOutcome: ...
 
     async def login_repeater(
         self,
@@ -127,6 +132,12 @@ class DirectSendOutcome:
     ack_code: str
     acknowledged: bool
     trip_time_ms: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RepeaterCommandOutcome:
+    response: str | None
+    attempts: int
 
 
 class SendPolicyError(ValueError):
@@ -513,37 +524,51 @@ class MeshCoreBackend:
         return await self.client.commands.req_acl_sync(public_key, timeout=timeout)
 
     async def run_repeater_command(
-        self, public_key: str, command: str, timeout: float
-    ) -> str | None:
-        tag = secrets.token_hex(1)
+        self,
+        public_key: str,
+        command: str,
+        timeout: float,
+        max_attempts: int,
+        retry_delay: float,
+    ) -> RepeaterCommandOutcome:
         prefix = public_key[:12].lower()
-        loop = asyncio.get_running_loop()
-        response: asyncio.Future[str] = loop.create_future()
+        bounded_attempts = max(1, min(max_attempts, 3))
+        for attempt in range(1, bounded_attempts + 1):
+            tag = secrets.token_hex(1)
+            loop = asyncio.get_running_loop()
+            response: asyncio.Future[str] = loop.create_future()
 
-        def capture(event: Any) -> None:
-            payload = event.payload if isinstance(event.payload, Mapping) else {}
-            event_prefix = str(payload.get("pubkey_prefix", "")).lower()
-            text = str(payload.get("text", ""))
-            if (
-                event_prefix == prefix
-                and payload.get("txt_type") == 1
-                and text.startswith(f"{tag}|")
-                and not response.done()
-            ):
-                response.set_result(text[3:])
+            def capture(
+                event: Any,
+                expected_tag: str = tag,
+                expected_response: asyncio.Future[str] = response,
+            ) -> None:
+                payload = event.payload if isinstance(event.payload, Mapping) else {}
+                event_prefix = str(payload.get("pubkey_prefix", "")).lower()
+                text = str(payload.get("text", ""))
+                if (
+                    event_prefix == prefix
+                    and payload.get("txt_type") == 1
+                    and text.startswith(f"{expected_tag}|")
+                    and not expected_response.done()
+                ):
+                    expected_response.set_result(text[3:])
 
-        subscription = self.client.subscribe(EventType.CONTACT_MSG_RECV, capture)
-        try:
-            _event_payload(
-                await self.client.commands.send_cmd(public_key, f"{tag}|{command}"),
-                "repeater command",
-            )
+            subscription = self.client.subscribe(EventType.CONTACT_MSG_RECV, capture)
             try:
-                return await asyncio.wait_for(asyncio.shield(response), timeout=timeout)
-            except TimeoutError:
-                return None
-        finally:
-            subscription.unsubscribe()
+                _event_payload(
+                    await self.client.commands.send_cmd(public_key, f"{tag}|{command}"),
+                    "repeater command",
+                )
+                try:
+                    reply = await asyncio.wait_for(asyncio.shield(response), timeout=timeout)
+                    return RepeaterCommandOutcome(reply, attempt)
+                except TimeoutError:
+                    if attempt < bounded_attempts:
+                        await asyncio.sleep(retry_delay)
+            finally:
+                subscription.unsubscribe()
+        return RepeaterCommandOutcome(None, bounded_attempts)
 
     async def login_repeater(
         self,
@@ -1049,15 +1074,17 @@ class RadioManager:
                 (int(item["perm"]) for item in before if str(item["key"]).lower() == prefix),
                 None,
             )
-            reply = await backend.run_repeater_command(
+            command = await backend.run_repeater_command(
                 repeater_key,
                 f"setperm {companion_key} {permissions}",
                 self.settings.repeater_mutation_timeout_seconds,
+                self.settings.repeater_command_max_attempts,
+                self.settings.repeater_command_retry_delay_seconds,
             )
-            if reply is None:
+            if command.response is None:
                 raise TimeoutError("repeater did not return an ACL mutation result")
-            if reply.strip() != "OK":
-                raise ConnectionError(f"repeater rejected ACL mutation: {reply}")
+            if command.response.strip() != "OK":
+                raise ConnectionError(f"repeater rejected ACL mutation: {command.response}")
             after = await backend.request_repeater_acl(
                 repeater_key, self.settings.repeater_mutation_timeout_seconds
             )
@@ -1075,6 +1102,7 @@ class RadioManager:
                 previous_permissions=previous,
                 permissions=permissions,
                 verified=True,
+                write_attempts=command.attempts,
                 completed_at=datetime.now(UTC),
             )
 
@@ -1093,27 +1121,33 @@ class RadioManager:
                 normalized_key,
                 "get advert.interval",
                 self.settings.repeater_mutation_timeout_seconds,
+                self.settings.repeater_command_max_attempts,
+                self.settings.repeater_command_retry_delay_seconds,
             )
-            if before is None:
+            if before.response is None:
                 raise TimeoutError("repeater did not return the current setting")
-            previous = self._parse_repeater_integer(before)
+            previous = self._parse_repeater_integer(before.response)
             changed = await backend.run_repeater_command(
                 normalized_key,
                 f"set advert.interval {value}",
                 self.settings.repeater_mutation_timeout_seconds,
+                self.settings.repeater_command_max_attempts,
+                self.settings.repeater_command_retry_delay_seconds,
             )
-            if changed is None:
+            if changed.response is None:
                 raise TimeoutError("repeater did not return a configuration result")
-            if changed.strip() != "OK":
-                raise ConnectionError(f"repeater rejected configuration: {changed}")
+            if changed.response.strip() != "OK":
+                raise ConnectionError(f"repeater rejected configuration: {changed.response}")
             readback = await backend.run_repeater_command(
                 normalized_key,
                 "get advert.interval",
                 self.settings.repeater_mutation_timeout_seconds,
+                self.settings.repeater_command_max_attempts,
+                self.settings.repeater_command_retry_delay_seconds,
             )
-            if readback is None:
+            if readback.response is None:
                 raise TimeoutError("repeater did not return configuration read-back")
-            observed = self._parse_repeater_integer(readback)
+            observed = self._parse_repeater_integer(readback.response)
             if observed != value:
                 raise ConnectionError("repeater configuration did not read back")
             return RepeaterConfigResult(
@@ -1122,6 +1156,9 @@ class RadioManager:
                 previous_value=previous,
                 value=observed,
                 verified=True,
+                pre_read_attempts=before.attempts,
+                write_attempts=changed.attempts,
+                post_read_attempts=readback.attempts,
                 completed_at=datetime.now(UTC),
             )
 
@@ -1153,13 +1190,16 @@ class RadioManager:
                 normalized_key,
                 "get advert.interval",
                 self.settings.repeater_mutation_timeout_seconds,
+                self.settings.repeater_command_max_attempts,
+                self.settings.repeater_command_retry_delay_seconds,
             )
-            if reply is None:
+            if reply.response is None:
                 raise TimeoutError("repeater did not return the current setting")
             return RepeaterConfigValue(
                 public_key=normalized_key,
                 setting=setting,
-                value=self._parse_repeater_integer(reply),
+                value=self._parse_repeater_integer(reply.response),
+                attempts=reply.attempts,
                 requested_at=datetime.now(UTC),
             )
 

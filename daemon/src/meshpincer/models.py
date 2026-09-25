@@ -211,6 +211,7 @@ class RepeaterAclUpdateResult(BaseModel):
     previous_permissions: int | None = Field(default=None, ge=0, le=3)
     permissions: int = Field(ge=0, le=3)
     verified: bool
+    write_attempts: int = Field(ge=1, le=3)
     completed_at: datetime
 
 
@@ -236,6 +237,9 @@ class RepeaterConfigResult(BaseModel):
     previous_value: int
     value: int
     verified: bool
+    pre_read_attempts: int = Field(ge=1, le=3)
+    write_attempts: int = Field(ge=1, le=3)
+    post_read_attempts: int = Field(ge=1, le=3)
     completed_at: datetime
 
 
@@ -243,6 +247,7 @@ class RepeaterConfigValue(BaseModel):
     public_key: str
     setting: RepeaterConfigSetting
     value: int
+    attempts: int = Field(ge=1, le=3)
     requested_at: datetime
 
 

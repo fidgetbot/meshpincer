@@ -33,7 +33,9 @@ authorized. The ACL mutation tool cannot change the connected companion's own
 role. The configuration tool currently accepts only
 `local_advert_interval_minutes` and requires read/change/read-back verification.
 Neither tool accepts arbitrary repeater CLI text.
-`meshcore_repeater_config_get` is read-only and sends one rate-limited request.
+`meshcore_repeater_config_get` is a read-only, rate-limited operation.
+The daemon may make up to three fresh correlated attempts for an idempotent
+typed CLI step after response timeouts; tool responses report attempt counts.
 Plugin activation alone does not bypass OpenClaw's normal tool policy.
 
 The typed client supports durable event replay and cursor advancement over the

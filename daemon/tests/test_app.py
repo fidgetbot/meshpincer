@@ -203,6 +203,7 @@ class FakeRadioManager:
             previous_permissions=None,
             permissions=permissions,
             verified=True,
+            write_attempts=1,
             completed_at="2026-09-24T18:00:00Z",
         )
 
@@ -215,6 +216,9 @@ class FakeRadioManager:
             previous_value=0,
             value=value,
             verified=True,
+            pre_read_attempts=1,
+            write_attempts=1,
+            post_read_attempts=1,
             completed_at="2026-09-24T18:00:00Z",
         )
 
@@ -225,6 +229,7 @@ class FakeRadioManager:
             public_key=public_key,
             setting=setting,
             value=0,
+            attempts=1,
             requested_at="2026-09-24T18:00:00Z",
         )
 

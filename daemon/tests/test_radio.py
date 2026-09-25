@@ -20,6 +20,7 @@ from meshpincer.radio import (
     DirectSendOutcome,
     MeshCoreBackend,
     RadioManager,
+    RepeaterCommandOutcome,
     RepeaterLoginDenied,
     SendPolicyError,
 )
@@ -240,7 +241,16 @@ class FakeBackend:
         self.repeater_acl_requests.append((public_key, timeout))
         return list(self.repeater_acl)
 
-    async def run_repeater_command(self, public_key: str, command: str, timeout: float):
+    async def run_repeater_command(
+        self,
+        public_key: str,
+        command: str,
+        timeout: float,
+        max_attempts: int,
+        retry_delay: float,
+    ):
+        assert max_attempts == 3
+        assert retry_delay == 1.0
         self.repeater_commands.append((public_key, command, timeout))
         if command.startswith("setperm "):
             _, key, raw_permissions = command.split()
@@ -249,13 +259,13 @@ class FakeBackend:
             self.repeater_acl = [item for item in self.repeater_acl if item["key"] != prefix]
             if permissions:
                 self.repeater_acl.append({"key": prefix, "perm": permissions})
-            return "OK"
+            return RepeaterCommandOutcome("OK", 1)
         if command == "get advert.interval":
-            return f"> {self.repeater_advert_interval}"
+            return RepeaterCommandOutcome(f"> {self.repeater_advert_interval}", 1)
         if command.startswith("set advert.interval "):
             self.repeater_advert_interval = int(command.rsplit(" ", 1)[1])
-            return "OK"
-        return "Err - unsupported"
+            return RepeaterCommandOutcome("OK", 1)
+        return RepeaterCommandOutcome("Err - unsupported", 1)
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -1010,8 +1020,45 @@ async def test_meshcore_backend_correlates_tagged_repeater_command_reply() -> No
             return Subscription()
 
     backend = MeshCoreBackend(FakeClient(), timeout=5)  # type: ignore[arg-type]
-    assert await backend.run_repeater_command("cd" * 32, "get advert.interval", 1) == "OK"
+    result = await backend.run_repeater_command("cd" * 32, "get advert.interval", 1, 3, 0)
+    assert result == RepeaterCommandOutcome("OK", 1)
     assert callbacks == []
+
+
+async def test_meshcore_backend_retries_typed_command_after_timeout() -> None:
+    callbacks = []
+    sends = 0
+
+    class Subscription:
+        def unsubscribe(self) -> None:
+            callbacks.clear()
+
+    class FakeCommands:
+        async def send_cmd(self, _public_key: str, command: str):
+            nonlocal sends
+            sends += 1
+            if sends == 2:
+                tag = command[:2]
+                for callback in list(callbacks):
+                    callback(
+                        Event(
+                            EventType.CONTACT_MSG_RECV,
+                            {"pubkey_prefix": "cd" * 6, "txt_type": 1, "text": f"{tag}|OK"},
+                        )
+                    )
+            return Event(EventType.MSG_SENT, {"expected_ack": b"1234"})
+
+    class FakeClient:
+        commands = FakeCommands()
+
+        def subscribe(self, _event_type, callback):
+            callbacks.append(callback)
+            return Subscription()
+
+    backend = MeshCoreBackend(FakeClient(), timeout=5)  # type: ignore[arg-type]
+    result = await backend.run_repeater_command("cd" * 32, "get advert.interval", 0.01, 3, 0)
+    assert result == RepeaterCommandOutcome("OK", 2)
+    assert sends == 2
 
 
 async def test_manager_updates_acl_with_pre_and_post_readback(tmp_path: Path) -> None:
@@ -1043,6 +1090,7 @@ async def test_manager_updates_acl_with_pre_and_post_readback(tmp_path: Path) ->
     assert result.previous_permissions is None
     assert result.permissions == 1
     assert result.verified is True
+    assert result.write_attempts == 1
     assert backend.repeater_commands == [("34" * 32, f"setperm {'56' * 32} 1", 15.0)]
     assert backend.repeater_acl_requests == [("34" * 32, 15.0), ("34" * 32, 15.0)]
 
@@ -1108,6 +1156,9 @@ async def test_manager_configures_repeater_with_read_change_readback(tmp_path: P
     assert result.previous_value == 0
     assert result.value == 60
     assert result.verified is True
+    assert result.pre_read_attempts == 1
+    assert result.write_attempts == 1
+    assert result.post_read_attempts == 1
     assert [command for _, command, _ in backend.repeater_commands] == [
         "get advert.interval",
         "set advert.interval 60",
@@ -1145,6 +1196,7 @@ async def test_manager_reads_repeater_config_without_mutation(tmp_path: Path) ->
         await manager.stop()
 
     assert result.value == 120
+    assert result.attempts == 1
     assert backend.repeater_advert_interval == 120
     assert [command for _, command, _ in backend.repeater_commands] == ["get advert.interval"]
 

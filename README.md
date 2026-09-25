@@ -161,6 +161,11 @@ administrative path. Live hardware mutation proof is tracked separately from
 local and CI validation.
 The separate `meshcore_repeater_config_get` tool reads that setting without
 changing it.
+Typed remote CLI steps make at most three attempts after response timeouts,
+using a fresh timestamp and correlation tag each time because repeater CLI
+replies have no ACK and firmware suppresses same-timestamp duplicates. Only
+idempotent typed commands are eligible, and responses expose their attempt
+counts.
 
 Pairing a new repeater-management relationship requires both route/identity
 visibility and ACL registration. Follow the complete, hardware-proven

@@ -192,6 +192,14 @@ prefix plus an ephemeral two-hex-character response prefix; commands and
 results contain no passwords. A separate `meshcore_repeater_config_get` tool
 performs one rate-limited `get` request without mutation.
 
+Typed remote CLI steps make at most three attempts. A retry occurs only after a
+bounded response timeout and re-executes the same idempotent typed operation
+with a fresh timestamp and correlation tag. This differs from ordinary text
+message retry: repeater firmware suppresses duplicate CLI execution for a
+repeated timestamp, and CLI replies have no ACK. Successful results report the
+attempt count for each step. Arbitrary CLI, destructive commands, password
+changes, and non-idempotent retry are not exposed.
+
 The transmit path must implement the project policy in
 [`docs/agent-etiquette.md`](docs/agent-etiquette.md). In particular:
 

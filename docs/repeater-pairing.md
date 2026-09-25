@@ -123,6 +123,13 @@ values from `60` through `240`. It reads the old value, changes it once, and
 requires a matching read-back. Restore the returned `previous_value` to roll
 the operation back. Neither tool accepts raw CLI text.
 
+Remote CLI replies are unacknowledged and can be lost even when the command
+arrives. MeshPincer therefore permits at most three attempts per idempotent
+typed step. Each timeout retry uses a fresh timestamp and response tag; reusing
+the timestamp would trigger firmware replay handling and suppress command
+execution. Results report the attempt count. This policy does not apply to
+arbitrary messages or commands.
+
 ## Proven hardware behavior
 
 The first successful hardware repeater status response occurred after both the

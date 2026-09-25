@@ -45,6 +45,8 @@ class Settings:
     repeater_acl_global_cooldown_seconds: float = 30.0
     repeater_acl_peer_cooldown_seconds: float = 60.0
     repeater_mutation_timeout_seconds: float = 15.0
+    repeater_command_max_attempts: int = 3
+    repeater_command_retry_delay_seconds: float = 1.0
     repeater_mutation_global_cooldown_seconds: float = 60.0
     repeater_mutation_peer_cooldown_seconds: float = 120.0
     repeater_config_read_global_cooldown_seconds: float = 30.0
@@ -119,6 +121,10 @@ class Settings:
             ),
             repeater_mutation_timeout_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_MUTATION_TIMEOUT", "15")
+            ),
+            repeater_command_max_attempts=_env_int("MESHPINCER_REPEATER_COMMAND_ATTEMPTS", 3),
+            repeater_command_retry_delay_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_COMMAND_RETRY_DELAY", "1")
             ),
             repeater_mutation_global_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_MUTATION_GLOBAL_COOLDOWN", "60")
