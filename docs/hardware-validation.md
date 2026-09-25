@@ -19,6 +19,21 @@ procedure. It does not isolate which advertisement was necessary because both
 occurred before the successful request. The reproducible operational procedure
 is recorded in [`repeater-pairing.md`](repeater-pairing.md).
 
+## Remote ACL inspection — 2026-09-24
+
+The companion was granted repeater admin role `3` through an already
+authenticated admin session using the generic command
+`setperm <64-hex-companion-public-key> 3`. MeshPincer then issued one bounded
+binary ACL request over the paired zero-hop route. The repeater returned three
+ACL entries, including the companion's expected six-byte public-key prefix with
+permission `3`. No retry, advertisement, credential exchange, or configuration
+mutation occurred during the read.
+
+This proves that remote ACL inspection is available through the binary admin
+protocol even though the text command `get acl` remains serial-only. Public
+validation records only entry counts, truncated key prefixes, and permission
+bytes; it omits full public keys and site-specific identity.
+
 ## Wio Tracker L1 Pro — 2026-09-20
 
 The first read-only hardware inventory was performed against a Wio Tracker L1

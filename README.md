@@ -147,8 +147,10 @@ per-repeater cooldown. It never polls automatically or retries a timed-out
 request. One-time repeater authentication is available through the local-only
 login endpoint and hidden-input CLI. The login sends exactly once, correlates
 success or rejection to the requested repeater prefix, and never stores or logs
-the credential. Authenticated repeater configuration remains disabled until its
-read/change/read-back path is implemented and hardware-proven.
+the credential. Admin-only remote ACL inspection is hardware-proven through one
+bounded binary request and returns only six-byte client key prefixes plus
+permission bytes. Authenticated repeater configuration remains disabled until
+its read/change/read-back path is implemented and hardware-proven.
 
 Pairing a new repeater-management relationship requires both route/identity
 visibility and ACL registration. Follow the complete, hardware-proven

@@ -116,5 +116,15 @@ For initial repeater registration, dual local advertisements, ACL permissions,
 and bounded status verification, follow
 [`docs/repeater-pairing.md`](../docs/repeater-pairing.md).
 
+An admin-registered companion can read one remote ACL snapshot with:
+
+```bash
+curl --unix-socket ~/.openclaw/state/meshpincer/meshpincer.sock \
+  http://localhost/v1/repeaters/<64-hex-repeater-public-key>/acl
+```
+
+The response contains only six-byte client key prefixes and permission bytes.
+The endpoint is independently rate-limited and never retries automatically.
+
 The API never returns passwords, channel secrets, USB hardware serials, or stored contact
 coordinates.

@@ -44,6 +44,21 @@ Never place a repeater password in chat, shell arguments, logs, or SQLite.
    response means the command was accepted; it does not prove end-to-end
    management traffic yet.
 
+   Permission roles used by the repeater firmware are:
+
+   - `1` — read-only; sufficient for status
+   - `2` — read-write; does not permit ACL inspection
+   - `3` — admin; required for remote binary ACL inspection
+
+   For a companion that will perform ongoing ACL audits, register it directly
+   as admin:
+
+   ```text
+   setperm <64-hex-companion-public-key> 3
+   ```
+
+   Retain role `3` only while that administrative capability is intended.
+
    Alternatively, register using the password from a hidden local prompt:
 
    ```bash
@@ -72,12 +87,35 @@ binary ACL request for remote admin clients. These are different interfaces;
 failure of the text command does not imply that remote binary ACL inspection is
 unsupported.
 
+After admin registration, request exactly one ACL snapshot through the OpenClaw
+`meshcore_repeater_acl` tool or the local daemon API:
+
+```bash
+curl --unix-socket ~/.openclaw/state/meshpincer/meshpincer.sock \
+  http://localhost/v1/repeaters/<64-hex-repeater-public-key>/acl
+```
+
+The response contains the repeater public key, route metadata, and ACL entries
+as six-byte public-key prefixes plus permission bytes. It does not expose full
+client public keys or credentials. MeshPincer serializes the request, applies
+independent 30-second global and 60-second per-repeater cooldowns, records a
+credential-free audit trail, and never retries automatically.
+
+Confirm registration by locating the first 12 hexadecimal characters of the
+companion's full public key and checking that its permission byte matches the
+intended role. To reduce privileges later, rerun `setperm` from an already
+authenticated repeater admin with role `1` or `2`.
+
 ## Proven hardware behavior
 
-The first successful Lighthouse status response occurred after both the
+The first successful hardware repeater status response occurred after both the
 MeshPincer companion and repeater had advertised locally and the companion had
 already been registered in the repeater ACL. Earlier status and login requests
 timed out. Because both advertisements happened before the successful request,
 the test proves the combined pairing sequence, not that either individual
 advertisement was independently necessary.
 
+A subsequent admin-only binary ACL request succeeded over the paired zero-hop
+route and returned the registered companion's six-byte key prefix with
+permission `3`. This proves remote ACL inspection independently of the
+serial-only `get acl` text command.
