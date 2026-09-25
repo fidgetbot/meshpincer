@@ -53,6 +53,7 @@ operator-tool contracts:
 - `meshcore_repeater_status`
 - `meshcore_repeater_acl`
 - `meshcore_repeater_acl_set`
+- `meshcore_repeater_config_get`
 - `meshcore_repeater_configure`
 
 The same package provides the `meshcore` messaging channel using the daemon API
@@ -85,6 +86,7 @@ Initial endpoints:
 - `GET /v1/repeaters/{public_key}/status`
 - `GET /v1/repeaters/{public_key}/acl`
 - `PATCH /v1/repeaters/{public_key}/acl`
+- `GET /v1/repeaters/{public_key}/config/{setting}`
 - `PATCH /v1/repeaters/{public_key}/config`
 
 The API is local-only. It must not bind a TCP listener by default.
@@ -187,7 +189,8 @@ performs `get advert.interval` → `set advert.interval` →
 operations have separate global/per-repeater cooldowns and durable audit
 events. The tagged remote CLI transport correlates replies by exact repeater
 prefix plus an ephemeral two-hex-character response prefix; commands and
-results contain no passwords.
+results contain no passwords. A separate `meshcore_repeater_config_get` tool
+performs one rate-limited `get` request without mutation.
 
 The transmit path must implement the project policy in
 [`docs/agent-etiquette.md`](docs/agent-etiquette.md). In particular:

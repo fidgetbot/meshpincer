@@ -159,6 +159,8 @@ use independent cooldowns, and never expose arbitrary remote CLI. The daemon
 also refuses to change its own ACL entry, avoiding accidental loss of the
 administrative path. Live hardware mutation proof is tracked separately from
 local and CI validation.
+The separate `meshcore_repeater_config_get` tool reads that setting without
+changing it.
 
 Pairing a new repeater-management relationship requires both route/identity
 visibility and ACL registration. Follow the complete, hardware-proven

@@ -26,6 +26,8 @@ from .models import (
     RepeaterAclUpdateResult,
     RepeaterConfigRequest,
     RepeaterConfigResult,
+    RepeaterConfigSetting,
+    RepeaterConfigValue,
     RepeaterLoginRequest,
     RepeaterLoginResult,
     RepeaterStatus,
@@ -648,6 +650,34 @@ def create_app(
             await store.append_event("repeater.config.failed", audit)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         await store.append_event("repeater.config.succeeded", result.model_dump(mode="json"))
+        return result
+
+    @app.get(
+        "/v1/repeaters/{public_key}/config/{setting}",
+        response_model=RepeaterConfigValue,
+    )
+    async def read_repeater_config(
+        setting: RepeaterConfigSetting,
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterConfigValue:
+        normalized_key = public_key.lower()
+        audit = {"public_key": normalized_key, "setting": setting.value}
+        await store.append_event("repeater.config.read.requested", audit)
+        try:
+            result = await radio.read_repeater_config(normalized_key, setting)
+        except SendPolicyError as exc:
+            await store.append_event("repeater.config.read.rate_limited", audit)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event("repeater.config.read.rejected", audit)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event("repeater.config.read.timed_out", audit)
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event("repeater.config.read.failed", audit)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("repeater.config.read.succeeded", result.model_dump(mode="json"))
         return result
 
     @app.patch(

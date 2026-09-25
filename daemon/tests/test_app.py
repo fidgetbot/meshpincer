@@ -17,6 +17,7 @@ from meshpincer.models import (
     RepeaterAclUpdateResult,
     RepeaterConfigResult,
     RepeaterConfigSetting,
+    RepeaterConfigValue,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -215,6 +216,16 @@ class FakeRadioManager:
             value=value,
             verified=True,
             completed_at="2026-09-24T18:00:00Z",
+        )
+
+    async def read_repeater_config(
+        self, public_key: str, setting: RepeaterConfigSetting
+    ) -> RepeaterConfigValue:
+        return RepeaterConfigValue(
+            public_key=public_key,
+            setting=setting,
+            value=0,
+            requested_at="2026-09-24T18:00:00Z",
         )
 
 
@@ -644,6 +655,9 @@ async def test_repeater_mutations_are_typed_verified_and_audited(settings: Setti
                 f"/v1/repeaters/{repeater}/config",
                 json={"setting": "local_advert_interval_minutes", "value": 60},
             )
+            current = await client.get(
+                f"/v1/repeaters/{repeater}/config/local_advert_interval_minutes"
+            )
             invalid = await client.patch(
                 f"/v1/repeaters/{repeater}/config",
                 json={"setting": "local_advert_interval_minutes", "value": 61},
@@ -652,12 +666,15 @@ async def test_repeater_mutations_are_typed_verified_and_audited(settings: Setti
 
     assert acl.status_code == 200 and acl.json()["verified"] is True
     assert config.status_code == 200 and config.json()["previous_value"] == 0
+    assert current.status_code == 200 and current.json()["value"] == 0
     assert invalid.status_code == 422
     assert [event["kind"] for event in events.json()] == [
         "repeater.acl.update.requested",
         "repeater.acl.update.succeeded",
         "repeater.config.requested",
         "repeater.config.succeeded",
+        "repeater.config.read.requested",
+        "repeater.config.read.succeeded",
     ]
 
 

@@ -192,6 +192,23 @@ export const toolEntry = defineToolPlugin({
       },
     }),
     tool({
+      name: "meshcore_repeater_config_get",
+      description:
+        "Read one typed repeater setting with a bounded, rate-limited remote request.",
+      parameters: Type.Object({
+        publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+        setting: Type.Literal("local_advert_interval_minutes"),
+      }),
+      execute: async ({ publicKey, setting }, config) => {
+        const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        return {
+          response: await client.get(
+            `/v1/repeaters/${encodeURIComponent(publicKey)}/config/${encodeURIComponent(setting)}`,
+          ),
+        };
+      },
+    }),
+    tool({
       name: "meshcore_repeater_acl_set",
       description:
         "Set one companion ACL permission on a known repeater and verify it by binary ACL read-back. Refuses to mutate this radio's own admin entry.",

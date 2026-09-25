@@ -28,6 +28,7 @@ from .models import (
     RepeaterAclUpdateResult,
     RepeaterConfigResult,
     RepeaterConfigSetting,
+    RepeaterConfigValue,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -653,6 +654,8 @@ class RadioManager:
         self._last_repeater_acl_by_peer: dict[str, float] = {}
         self._last_repeater_mutation = float("-inf")
         self._last_repeater_mutation_by_peer: dict[str, float] = {}
+        self._last_repeater_config_read = float("-inf")
+        self._last_repeater_config_read_by_peer: dict[str, float] = {}
         self._last_repeater_login = float("-inf")
         self._last_repeater_login_by_peer: dict[str, float] = {}
         self._last_local_advert = float("-inf")
@@ -1122,19 +1125,46 @@ class RadioManager:
                 completed_at=datetime.now(UTC),
             )
 
-    async def _validate_repeater_mutation(self, public_key: str) -> None:
-        async with self._lock:
-            connected = self._status.connected
-            contact = next(
-                (item for item in self._contacts if item.public_key.lower() == public_key),
-                None,
+    async def read_repeater_config(
+        self, public_key: str, setting: RepeaterConfigSetting
+    ) -> RepeaterConfigValue:
+        normalized_key = public_key.lower()
+        if setting is not RepeaterConfigSetting.LOCAL_ADVERT_INTERVAL_MINUTES:
+            raise ValueError("unsupported repeater setting")
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await self._validate_repeater_target(normalized_key)
+            now = asyncio.get_running_loop().time()
+            remaining = max(
+                self._last_repeater_config_read
+                + self.settings.repeater_config_read_global_cooldown_seconds
+                - now,
+                self._last_repeater_config_read_by_peer.get(normalized_key, float("-inf"))
+                + self.settings.repeater_config_read_peer_cooldown_seconds
+                - now,
             )
-        if not connected:
-            raise ConnectionError("MeshCore radio is not connected")
-        if contact is None:
-            raise ValueError("repeater is not a known contact")
-        if contact.node_type != 2:
-            raise ValueError("contact is not a repeater")
+            if remaining > 0:
+                raise SendPolicyError(
+                    f"repeater configuration-read cooldown active for {remaining:.1f}s"
+                )
+            self._last_repeater_config_read = now
+            self._last_repeater_config_read_by_peer[normalized_key] = now
+            reply = await backend.run_repeater_command(
+                normalized_key,
+                "get advert.interval",
+                self.settings.repeater_mutation_timeout_seconds,
+            )
+            if reply is None:
+                raise TimeoutError("repeater did not return the current setting")
+            return RepeaterConfigValue(
+                public_key=normalized_key,
+                setting=setting,
+                value=self._parse_repeater_integer(reply),
+                requested_at=datetime.now(UTC),
+            )
+
+    async def _validate_repeater_mutation(self, public_key: str) -> None:
+        await self._validate_repeater_target(public_key)
         now = asyncio.get_running_loop().time()
         retry_after = max(
             self._last_repeater_mutation
@@ -1148,6 +1178,20 @@ class RadioManager:
             raise SendPolicyError(f"repeater mutation cooldown active for {retry_after:.1f}s")
         self._last_repeater_mutation = now
         self._last_repeater_mutation_by_peer[public_key] = now
+
+    async def _validate_repeater_target(self, public_key: str) -> None:
+        async with self._lock:
+            connected = self._status.connected
+            contact = next(
+                (item for item in self._contacts if item.public_key.lower() == public_key),
+                None,
+            )
+        if not connected:
+            raise ConnectionError("MeshCore radio is not connected")
+        if contact is None:
+            raise ValueError("repeater is not a known contact")
+        if contact.node_type != 2:
+            raise ValueError("contact is not a repeater")
 
     @staticmethod
     def _parse_repeater_integer(reply: str) -> int:

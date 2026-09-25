@@ -239,6 +239,13 @@ class RepeaterConfigResult(BaseModel):
     completed_at: datetime
 
 
+class RepeaterConfigValue(BaseModel):
+    public_key: str
+    setting: RepeaterConfigSetting
+    value: int
+    requested_at: datetime
+
+
 class DatabaseStatus(BaseModel):
     database_bytes: int = Field(ge=0)
     wal_bytes: int = Field(ge=0)

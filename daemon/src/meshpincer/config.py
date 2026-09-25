@@ -47,6 +47,8 @@ class Settings:
     repeater_mutation_timeout_seconds: float = 15.0
     repeater_mutation_global_cooldown_seconds: float = 60.0
     repeater_mutation_peer_cooldown_seconds: float = 120.0
+    repeater_config_read_global_cooldown_seconds: float = 30.0
+    repeater_config_read_peer_cooldown_seconds: float = 60.0
     repeater_login_timeout_seconds: float = 15.0
     repeater_login_global_cooldown_seconds: float = 30.0
     repeater_login_peer_cooldown_seconds: float = 60.0
@@ -123,6 +125,12 @@ class Settings:
             ),
             repeater_mutation_peer_cooldown_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_MUTATION_PEER_COOLDOWN", "120")
+            ),
+            repeater_config_read_global_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_CONFIG_READ_GLOBAL_COOLDOWN", "30")
+            ),
+            repeater_config_read_peer_cooldown_seconds=float(
+                os.environ.get("MESHPINCER_REPEATER_CONFIG_READ_PEER_COOLDOWN", "60")
             ),
             repeater_login_timeout_seconds=float(
                 os.environ.get("MESHPINCER_REPEATER_LOGIN_TIMEOUT", "15")

@@ -1115,6 +1115,40 @@ async def test_manager_configures_repeater_with_read_change_readback(tmp_path: P
     ]
 
 
+async def test_manager_reads_repeater_config_without_mutation(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_config_read_global_cooldown_seconds=0,
+        repeater_config_read_peer_cooldown_seconds=0,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+    backend.repeater_advert_interval = 120
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        result = await manager.read_repeater_config(
+            "34" * 32, RepeaterConfigSetting.LOCAL_ADVERT_INTERVAL_MINUTES
+        )
+    finally:
+        await manager.stop()
+
+    assert result.value == 120
+    assert backend.repeater_advert_interval == 120
+    assert [command for _, command, _ in backend.repeater_commands] == ["get advert.interval"]
+
+
 async def test_manager_logs_into_one_known_repeater_and_rate_limits(tmp_path: Path) -> None:
     config = Settings(
         state_dir=tmp_path,
