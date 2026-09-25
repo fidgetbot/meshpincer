@@ -10,7 +10,12 @@ from meshcore.events import Event, EventType
 
 from meshpincer.config import Settings
 from meshpincer.discovery import SerialDevice
-from meshpincer.models import ContactRouteMode, InboundMessage, RepeaterStatusTransport
+from meshpincer.models import (
+    ContactRouteMode,
+    InboundMessage,
+    RepeaterConfigSetting,
+    RepeaterStatusTransport,
+)
 from meshpincer.radio import (
     DirectSendOutcome,
     MeshCoreBackend,
@@ -34,6 +39,9 @@ class FakeBackend:
         self.repeater_status_requests: list[tuple[str, float]] = []
         self.repeater_acl_requests: list[tuple[str, float]] = []
         self.repeater_login_requests: list[tuple[str, str, float]] = []
+        self.repeater_commands: list[tuple[str, str, float]] = []
+        self.repeater_acl = [{"key": "12" * 6, "perm": 2}]
+        self.repeater_advert_interval = 0
         self.contact_records: dict[str, dict[str, Any]] = {
             "34" * 32: {
                 "public_key": "34" * 32,
@@ -230,7 +238,24 @@ class FakeBackend:
 
     async def request_repeater_acl(self, public_key: str, timeout: float):
         self.repeater_acl_requests.append((public_key, timeout))
-        return [{"key": "12" * 6, "perm": 2}]
+        return list(self.repeater_acl)
+
+    async def run_repeater_command(self, public_key: str, command: str, timeout: float):
+        self.repeater_commands.append((public_key, command, timeout))
+        if command.startswith("setperm "):
+            _, key, raw_permissions = command.split()
+            prefix = key[:12]
+            permissions = int(raw_permissions)
+            self.repeater_acl = [item for item in self.repeater_acl if item["key"] != prefix]
+            if permissions:
+                self.repeater_acl.append({"key": prefix, "perm": permissions})
+            return "OK"
+        if command == "get advert.interval":
+            return f"> {self.repeater_advert_interval}"
+        if command.startswith("set advert.interval "):
+            self.repeater_advert_interval = int(command.rsplit(" ", 1)[1])
+            return "OK"
+        return "Err - unsupported"
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -950,6 +975,144 @@ async def test_meshcore_backend_requests_repeater_acl_once() -> None:
     result = await backend.request_repeater_acl("cd" * 32, timeout=11)
     assert commands.calls == [("cd" * 32, 11)]
     assert result == [{"key": "ab" * 6, "perm": 3}]
+
+
+async def test_meshcore_backend_correlates_tagged_repeater_command_reply() -> None:
+    callbacks = []
+
+    class Subscription:
+        def unsubscribe(self) -> None:
+            callbacks.clear()
+
+    class FakeCommands:
+        async def send_cmd(self, public_key: str, command: str):
+            assert public_key == "cd" * 32
+            tag = command[:2]
+            for callback in list(callbacks):
+                callback(
+                    Event(
+                        EventType.CONTACT_MSG_RECV,
+                        {
+                            "pubkey_prefix": "cd" * 6,
+                            "txt_type": 1,
+                            "text": f"{tag}|OK",
+                        },
+                    )
+                )
+            return Event(EventType.MSG_SENT, {"expected_ack": b"1234"})
+
+    class FakeClient:
+        commands = FakeCommands()
+
+        def subscribe(self, event_type, callback):
+            assert event_type is EventType.CONTACT_MSG_RECV
+            callbacks.append(callback)
+            return Subscription()
+
+    backend = MeshCoreBackend(FakeClient(), timeout=5)  # type: ignore[arg-type]
+    assert await backend.run_repeater_command("cd" * 32, "get advert.interval", 1) == "OK"
+    assert callbacks == []
+
+
+async def test_manager_updates_acl_with_pre_and_post_readback(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_mutation_global_cooldown_seconds=0,
+        repeater_mutation_peer_cooldown_seconds=0,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        result = await manager.set_repeater_acl_permission("34" * 32, "56" * 32, 1)
+    finally:
+        await manager.stop()
+
+    assert result.previous_permissions is None
+    assert result.permissions == 1
+    assert result.verified is True
+    assert backend.repeater_commands == [("34" * 32, f"setperm {'56' * 32} 1", 15.0)]
+    assert backend.repeater_acl_requests == [("34" * 32, 15.0), ("34" * 32, 15.0)]
+
+
+async def test_manager_refuses_to_mutate_own_acl_entry(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_mutation_global_cooldown_seconds=0,
+        repeater_mutation_peer_cooldown_seconds=0,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        with pytest.raises(ValueError, match="own ACL"):
+            await manager.set_repeater_acl_permission("34" * 32, "12" * 32, 1)
+    finally:
+        await manager.stop()
+
+    assert backend.repeater_commands == []
+
+
+async def test_manager_configures_repeater_with_read_change_readback(tmp_path: Path) -> None:
+    config = Settings(
+        state_dir=tmp_path,
+        socket_path=tmp_path / "meshpincer.sock",
+        refresh_interval_seconds=60,
+        repeater_mutation_global_cooldown_seconds=0,
+        repeater_mutation_peer_cooldown_seconds=0,
+    )
+    backend = FakeBackend()
+    backend.contact_node_type = 2
+
+    async def connector(_port: str, _timeout: float) -> FakeBackend:
+        return backend
+
+    manager = RadioManager(
+        config,
+        discoverer=lambda _settings: SerialDevice(port="/dev/cu.dynamic"),
+        connector=connector,
+    )
+    await manager.start()
+    try:
+        await wait_until_connected(manager)
+        result = await manager.configure_repeater(
+            "34" * 32, RepeaterConfigSetting.LOCAL_ADVERT_INTERVAL_MINUTES, 60
+        )
+    finally:
+        await manager.stop()
+
+    assert result.previous_value == 0
+    assert result.value == 60
+    assert result.verified is True
+    assert [command for _, command, _ in backend.repeater_commands] == [
+        "get advert.interval",
+        "set advert.interval 60",
+        "get advert.interval",
+    ]
 
 
 async def test_manager_logs_into_one_known_repeater_and_rate_limits(tmp_path: Path) -> None:

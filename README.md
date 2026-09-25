@@ -149,8 +149,16 @@ login endpoint and hidden-input CLI. The login sends exactly once, correlates
 success or rejection to the requested repeater prefix, and never stores or logs
 the credential. Admin-only remote ACL inspection is hardware-proven through one
 bounded binary request and returns only six-byte client key prefixes plus
-permission bytes. Authenticated repeater configuration remains disabled until
-its read/change/read-back path is implemented and hardware-proven.
+permission bytes. Typed repeater mutations are implemented behind the same
+daemon-owned connection: `meshcore_repeater_acl_set` changes another
+companion's role and verifies the resulting ACL snapshot, while
+`meshcore_repeater_configure` initially supports only the reversible local
+zero-hop advert interval. Configuration performs a pre-read, one change, and a
+post-change read-back. Both mutation tools reject unknown/non-repeater targets,
+use independent cooldowns, and never expose arbitrary remote CLI. The daemon
+also refuses to change its own ACL entry, avoiding accidental loss of the
+administrative path. Live hardware mutation proof is tracked separately from
+local and CI validation.
 
 Pairing a new repeater-management relationship requires both route/identity
 visibility and ACL registration. Follow the complete, hardware-proven

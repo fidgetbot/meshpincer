@@ -18,8 +18,6 @@ export const pluginConfigSchema = Type.Object({
   ),
 });
 
-const scalar = Type.Union([Type.String(), Type.Number(), Type.Boolean()]);
-
 type MessageQuery = {
   mode: "unread" | "history";
   afterId: number;
@@ -194,19 +192,41 @@ export const toolEntry = defineToolPlugin({
       },
     }),
     tool({
-      name: "meshcore_repeater_configure",
-      description: "Apply validated settings to a known MeshCore repeater.",
+      name: "meshcore_repeater_acl_set",
+      description:
+        "Set one companion ACL permission on a known repeater and verify it by binary ACL read-back. Refuses to mutate this radio's own admin entry.",
       parameters: Type.Object({
-        publicKey: Type.String({ minLength: 2 }),
-        settings: Type.Record(Type.String(), scalar),
+        publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+        companionPublicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+        permissions: Type.Integer({ minimum: 0, maximum: 3 }),
       }),
       optional: true,
-      execute: async ({ publicKey, settings }, config) => {
+      execute: async ({ publicKey, companionPublicKey, permissions }, config) => {
+        const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
+        return {
+          response: await client.patch(
+            `/v1/repeaters/${encodeURIComponent(publicKey)}/acl`,
+            { companion_public_key: companionPublicKey, permissions },
+          ),
+        };
+      },
+    }),
+    tool({
+      name: "meshcore_repeater_configure",
+      description:
+        "Set a typed, reversible repeater setting with mandatory pre-read and post-change read-back verification.",
+      parameters: Type.Object({
+        publicKey: Type.String({ pattern: "^[0-9A-Fa-f]{64}$" }),
+        setting: Type.Literal("local_advert_interval_minutes"),
+        value: Type.Integer({ minimum: 0, maximum: 240 }),
+      }),
+      optional: true,
+      execute: async ({ publicKey, setting, value }, config) => {
         const client = new MeshPincerClient(config.socketPath ?? defaultSocketPath);
         return {
           response: await client.patch(
             `/v1/repeaters/${encodeURIComponent(publicKey)}/config`,
-            { settings },
+            { setting, value },
           ),
         };
       },

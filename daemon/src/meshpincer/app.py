@@ -22,7 +22,10 @@ from .models import (
     MessageRecord,
     RenameChannelRequest,
     RepeaterAcl,
+    RepeaterAclUpdateRequest,
+    RepeaterAclUpdateResult,
     RepeaterConfigRequest,
+    RepeaterConfigResult,
     RepeaterLoginRequest,
     RepeaterLoginResult,
     RepeaterStatus,
@@ -620,13 +623,67 @@ def create_app(
 
     @app.patch("/v1/repeaters/{public_key}/config")
     async def configure_repeater(
-        public_key: str,
         request: RepeaterConfigRequest,
-    ) -> dict[str, object]:
-        raise HTTPException(
-            status_code=501,
-            detail={"public_key": public_key, "settings": request.settings},
-        )
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterConfigResult:
+        normalized_key = public_key.lower()
+        audit = {
+            "public_key": normalized_key,
+            "setting": request.setting.value,
+            "value": request.value,
+        }
+        await store.append_event("repeater.config.requested", audit)
+        try:
+            result = await radio.configure_repeater(normalized_key, request.setting, request.value)
+        except SendPolicyError as exc:
+            await store.append_event("repeater.config.rate_limited", audit)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event("repeater.config.rejected", audit)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event("repeater.config.timed_out", audit)
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event("repeater.config.failed", audit)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("repeater.config.succeeded", result.model_dump(mode="json"))
+        return result
+
+    @app.patch(
+        "/v1/repeaters/{public_key}/acl",
+        response_model=RepeaterAclUpdateResult,
+    )
+    async def update_repeater_acl(
+        request: RepeaterAclUpdateRequest,
+        public_key: str = Path(pattern=r"^[0-9A-Fa-f]{64}$"),
+    ) -> RepeaterAclUpdateResult:
+        normalized_key = public_key.lower()
+        target = request.companion_public_key.lower()
+        audit = {
+            "public_key": normalized_key,
+            "companion_public_key_prefix": target[:12],
+            "permissions": request.permissions,
+        }
+        await store.append_event("repeater.acl.update.requested", audit)
+        try:
+            result = await radio.set_repeater_acl_permission(
+                normalized_key, target, request.permissions
+            )
+        except SendPolicyError as exc:
+            await store.append_event("repeater.acl.update.rate_limited", audit)
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ValueError as exc:
+            await store.append_event("repeater.acl.update.rejected", audit)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            await store.append_event("repeater.acl.update.timed_out", audit)
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        except Exception as exc:
+            await store.append_event("repeater.acl.update.failed", audit)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await store.append_event("repeater.acl.update.succeeded", result.model_dump(mode="json"))
+        return result
 
     return app
 

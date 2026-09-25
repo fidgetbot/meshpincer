@@ -52,6 +52,7 @@ operator-tool contracts:
 - `meshcore_send`
 - `meshcore_repeater_status`
 - `meshcore_repeater_acl`
+- `meshcore_repeater_acl_set`
 - `meshcore_repeater_configure`
 
 The same package provides the `meshcore` messaging channel using the daemon API
@@ -83,6 +84,7 @@ Initial endpoints:
 - `POST /v1/repeaters/{public_key}/login`
 - `GET /v1/repeaters/{public_key}/status`
 - `GET /v1/repeaters/{public_key}/acl`
+- `PATCH /v1/repeaters/{public_key}/acl`
 - `PATCH /v1/repeaters/{public_key}/config`
 
 The API is local-only. It must not bind a TCP listener by default.
@@ -173,6 +175,19 @@ without changing the device clock. Repeater status requests count generic binary
 and parsed status responses during their bounded wait; missing matching status
 is logged using counts and the requested peer prefix only, never packet payloads.
 These diagnostics do not add RF transmissions or automatic retries.
+
+Repeater mutation is typed rather than arbitrary CLI passthrough. ACL updates
+accept one exact 64-hex companion key and role `0` through `3`, pre-read the
+binary ACL, send one `setperm` command, and require a binary ACL read-back. The
+connected companion's own ACL entry is immutable through this API. Repeater
+configuration initially permits only `local_advert_interval_minutes`, with
+firmware-compatible values (`0`, or an even value from `60` through `240`). It
+performs `get advert.interval` → `set advert.interval` →
+`get advert.interval` and succeeds only when the final value matches. Mutation
+operations have separate global/per-repeater cooldowns and durable audit
+events. The tagged remote CLI transport correlates replies by exact repeater
+prefix plus an ephemeral two-hex-character response prefix; commands and
+results contain no passwords.
 
 The transmit path must implement the project policy in
 [`docs/agent-etiquette.md`](docs/agent-etiquette.md). In particular:

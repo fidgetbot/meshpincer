@@ -27,8 +27,12 @@ the implemented operator tools to `tools.alsoAllow`:
 Allow `meshcore_repeater_status` only after the daemon's bounded read-only
 status endpoint is deployed. `meshcore_repeater_acl` performs one bounded,
 admin-only binary ACL read and returns six-byte key prefixes plus permission
-bytes; it cannot mutate the ACL. Keep `meshcore_repeater_configure` hidden until
-its authenticated read/change/read-back workflow is implemented and verified.
+bytes. Keep `meshcore_repeater_acl_set` and `meshcore_repeater_configure` hidden
+until their daemon endpoints are deployed, hardware-proven, and explicitly
+authorized. The ACL mutation tool cannot change the connected companion's own
+role. The configuration tool currently accepts only
+`local_advert_interval_minutes` and requires read/change/read-back verification.
+Neither tool accepts arbitrary repeater CLI text.
 Plugin activation alone does not bypass OpenClaw's normal tool policy.
 
 The typed client supports durable event replay and cursor advancement over the

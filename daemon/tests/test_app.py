@@ -14,6 +14,9 @@ from meshpincer.models import (
     RadioStatus,
     RepeaterAcl,
     RepeaterAclEntry,
+    RepeaterAclUpdateResult,
+    RepeaterConfigResult,
+    RepeaterConfigSetting,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -188,6 +191,30 @@ class FakeRadioManager:
             path_length=0,
             entries=[RepeaterAclEntry(public_key_prefix="12" * 6, permissions=2)],
             requested_at="2026-09-24T18:00:00Z",
+        )
+
+    async def set_repeater_acl_permission(
+        self, repeater_public_key: str, companion_public_key: str, permissions: int
+    ) -> RepeaterAclUpdateResult:
+        return RepeaterAclUpdateResult(
+            repeater_public_key=repeater_public_key,
+            companion_public_key_prefix=companion_public_key[:12],
+            previous_permissions=None,
+            permissions=permissions,
+            verified=True,
+            completed_at="2026-09-24T18:00:00Z",
+        )
+
+    async def configure_repeater(
+        self, public_key: str, setting: RepeaterConfigSetting, value: int
+    ) -> RepeaterConfigResult:
+        return RepeaterConfigResult(
+            public_key=public_key,
+            setting=setting,
+            previous_value=0,
+            value=value,
+            verified=True,
+            completed_at="2026-09-24T18:00:00Z",
         )
 
 
@@ -598,6 +625,39 @@ async def test_repeater_acl_records_one_read_and_success(settings: Settings) -> 
     assert [event["kind"] for event in events.json()] == [
         "repeater.acl.requested",
         "repeater.acl.succeeded",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeater_mutations_are_typed_verified_and_audited(settings: Settings) -> None:
+    app = create_app(settings, radio_manager=FakeRadioManager())  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    repeater = "ab" * 32
+    companion = "cd" * 32
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            acl = await client.patch(
+                f"/v1/repeaters/{repeater}/acl",
+                json={"companion_public_key": companion, "permissions": 1},
+            )
+            config = await client.patch(
+                f"/v1/repeaters/{repeater}/config",
+                json={"setting": "local_advert_interval_minutes", "value": 60},
+            )
+            invalid = await client.patch(
+                f"/v1/repeaters/{repeater}/config",
+                json={"setting": "local_advert_interval_minutes", "value": 61},
+            )
+            events = await client.get("/v1/events")
+
+    assert acl.status_code == 200 and acl.json()["verified"] is True
+    assert config.status_code == 200 and config.json()["previous_value"] == 0
+    assert invalid.status_code == 422
+    assert [event["kind"] for event in events.json()] == [
+        "repeater.acl.update.requested",
+        "repeater.acl.update.succeeded",
+        "repeater.config.requested",
+        "repeater.config.succeeded",
     ]
 
 

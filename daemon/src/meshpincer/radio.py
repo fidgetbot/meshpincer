@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,9 @@ from .models import (
     RadioTelemetry,
     RepeaterAcl,
     RepeaterAclEntry,
+    RepeaterAclUpdateResult,
+    RepeaterConfigResult,
+    RepeaterConfigSetting,
     RepeaterLoginResult,
     RepeaterStatus,
     RepeaterStatusTransport,
@@ -95,6 +99,10 @@ class RadioBackend(Protocol):
         public_key: str,
         timeout: float,
     ) -> Sequence[Mapping[str, Any]] | None: ...
+
+    async def run_repeater_command(
+        self, public_key: str, command: str, timeout: float
+    ) -> str | None: ...
 
     async def login_repeater(
         self,
@@ -503,6 +511,39 @@ class MeshCoreBackend:
     ) -> Sequence[Mapping[str, Any]] | None:
         return await self.client.commands.req_acl_sync(public_key, timeout=timeout)
 
+    async def run_repeater_command(
+        self, public_key: str, command: str, timeout: float
+    ) -> str | None:
+        tag = secrets.token_hex(1)
+        prefix = public_key[:12].lower()
+        loop = asyncio.get_running_loop()
+        response: asyncio.Future[str] = loop.create_future()
+
+        def capture(event: Any) -> None:
+            payload = event.payload if isinstance(event.payload, Mapping) else {}
+            event_prefix = str(payload.get("pubkey_prefix", "")).lower()
+            text = str(payload.get("text", ""))
+            if (
+                event_prefix == prefix
+                and payload.get("txt_type") == 1
+                and text.startswith(f"{tag}|")
+                and not response.done()
+            ):
+                response.set_result(text[3:])
+
+        subscription = self.client.subscribe(EventType.CONTACT_MSG_RECV, capture)
+        try:
+            _event_payload(
+                await self.client.commands.send_cmd(public_key, f"{tag}|{command}"),
+                "repeater command",
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(response), timeout=timeout)
+            except TimeoutError:
+                return None
+        finally:
+            subscription.unsubscribe()
+
     async def login_repeater(
         self,
         public_key: str,
@@ -610,6 +651,8 @@ class RadioManager:
         self._last_repeater_status_by_peer: dict[str, float] = {}
         self._last_repeater_acl = float("-inf")
         self._last_repeater_acl_by_peer: dict[str, float] = {}
+        self._last_repeater_mutation = float("-inf")
+        self._last_repeater_mutation_by_peer: dict[str, float] = {}
         self._last_repeater_login = float("-inf")
         self._last_repeater_login_by_peer: dict[str, float] = {}
         self._last_local_advert = float("-inf")
@@ -978,6 +1021,143 @@ class RadioManager:
                 ],
                 requested_at=datetime.now(UTC),
             )
+
+    async def set_repeater_acl_permission(
+        self, repeater_public_key: str, companion_public_key: str, permissions: int
+    ) -> RepeaterAclUpdateResult:
+        repeater_key = repeater_public_key.lower()
+        companion_key = companion_public_key.lower()
+        if not 0 <= permissions <= 3:
+            raise ValueError("permissions must be between 0 and 3")
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            async with self._lock:
+                own_key = (self._status.public_key or "").lower()
+            if companion_key == own_key:
+                raise ValueError("refusing to mutate the connected companion's own ACL entry")
+            await self._validate_repeater_mutation(repeater_key)
+            before = await backend.request_repeater_acl(
+                repeater_key, self.settings.repeater_mutation_timeout_seconds
+            )
+            if before is None:
+                raise TimeoutError("repeater did not return the pre-change ACL")
+            prefix = companion_key[:12]
+            previous = next(
+                (int(item["perm"]) for item in before if str(item["key"]).lower() == prefix),
+                None,
+            )
+            reply = await backend.run_repeater_command(
+                repeater_key,
+                f"setperm {companion_key} {permissions}",
+                self.settings.repeater_mutation_timeout_seconds,
+            )
+            if reply is None:
+                raise TimeoutError("repeater did not return an ACL mutation result")
+            if reply.strip() != "OK":
+                raise ConnectionError(f"repeater rejected ACL mutation: {reply}")
+            after = await backend.request_repeater_acl(
+                repeater_key, self.settings.repeater_mutation_timeout_seconds
+            )
+            if after is None:
+                raise TimeoutError("repeater did not return the post-change ACL")
+            observed = next(
+                (int(item["perm"]) for item in after if str(item["key"]).lower() == prefix),
+                0,
+            )
+            if observed != permissions:
+                raise ConnectionError("ACL mutation did not read back from the repeater")
+            return RepeaterAclUpdateResult(
+                repeater_public_key=repeater_key,
+                companion_public_key_prefix=prefix,
+                previous_permissions=previous,
+                permissions=permissions,
+                verified=True,
+                completed_at=datetime.now(UTC),
+            )
+
+    async def configure_repeater(
+        self, public_key: str, setting: RepeaterConfigSetting, value: int
+    ) -> RepeaterConfigResult:
+        normalized_key = public_key.lower()
+        if setting is not RepeaterConfigSetting.LOCAL_ADVERT_INTERVAL_MINUTES:
+            raise ValueError("unsupported repeater setting")
+        if value != 0 and (value < 60 or value > 240 or value % 2):
+            raise ValueError("local advert interval must be 0 or an even value from 60 to 240")
+        async with self._operation_lock:
+            backend = await self._connected_backend()
+            await self._validate_repeater_mutation(normalized_key)
+            before = await backend.run_repeater_command(
+                normalized_key,
+                "get advert.interval",
+                self.settings.repeater_mutation_timeout_seconds,
+            )
+            if before is None:
+                raise TimeoutError("repeater did not return the current setting")
+            previous = self._parse_repeater_integer(before)
+            changed = await backend.run_repeater_command(
+                normalized_key,
+                f"set advert.interval {value}",
+                self.settings.repeater_mutation_timeout_seconds,
+            )
+            if changed is None:
+                raise TimeoutError("repeater did not return a configuration result")
+            if changed.strip() != "OK":
+                raise ConnectionError(f"repeater rejected configuration: {changed}")
+            readback = await backend.run_repeater_command(
+                normalized_key,
+                "get advert.interval",
+                self.settings.repeater_mutation_timeout_seconds,
+            )
+            if readback is None:
+                raise TimeoutError("repeater did not return configuration read-back")
+            observed = self._parse_repeater_integer(readback)
+            if observed != value:
+                raise ConnectionError("repeater configuration did not read back")
+            return RepeaterConfigResult(
+                public_key=normalized_key,
+                setting=setting,
+                previous_value=previous,
+                value=observed,
+                verified=True,
+                completed_at=datetime.now(UTC),
+            )
+
+    async def _validate_repeater_mutation(self, public_key: str) -> None:
+        async with self._lock:
+            connected = self._status.connected
+            contact = next(
+                (item for item in self._contacts if item.public_key.lower() == public_key),
+                None,
+            )
+        if not connected:
+            raise ConnectionError("MeshCore radio is not connected")
+        if contact is None:
+            raise ValueError("repeater is not a known contact")
+        if contact.node_type != 2:
+            raise ValueError("contact is not a repeater")
+        now = asyncio.get_running_loop().time()
+        retry_after = max(
+            self._last_repeater_mutation
+            + self.settings.repeater_mutation_global_cooldown_seconds
+            - now,
+            self._last_repeater_mutation_by_peer.get(public_key, float("-inf"))
+            + self.settings.repeater_mutation_peer_cooldown_seconds
+            - now,
+        )
+        if retry_after > 0:
+            raise SendPolicyError(f"repeater mutation cooldown active for {retry_after:.1f}s")
+        self._last_repeater_mutation = now
+        self._last_repeater_mutation_by_peer[public_key] = now
+
+    @staticmethod
+    def _parse_repeater_integer(reply: str) -> int:
+        value = reply.strip()
+        if value.startswith(">"):
+            value = value[1:].strip()
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ConnectionError(f"invalid repeater integer response: {reply}") from exc
 
     async def login_repeater(self, public_key: str, password: str) -> RepeaterLoginResult:
         normalized_key = public_key.lower()

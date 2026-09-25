@@ -200,6 +200,45 @@ class RepeaterAcl(BaseModel):
     requested_at: datetime
 
 
+class RepeaterAclUpdateRequest(BaseModel):
+    companion_public_key: str = Field(pattern=r"^[0-9A-Fa-f]{64}$")
+    permissions: int = Field(ge=0, le=3)
+
+
+class RepeaterAclUpdateResult(BaseModel):
+    repeater_public_key: str
+    companion_public_key_prefix: str = Field(pattern=r"^[0-9a-f]{12}$")
+    previous_permissions: int | None = Field(default=None, ge=0, le=3)
+    permissions: int = Field(ge=0, le=3)
+    verified: bool
+    completed_at: datetime
+
+
+class RepeaterConfigSetting(StrEnum):
+    LOCAL_ADVERT_INTERVAL_MINUTES = "local_advert_interval_minutes"
+
+
+class RepeaterConfigRequest(BaseModel):
+    setting: RepeaterConfigSetting
+    value: int
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: int) -> int:
+        if value != 0 and (value < 60 or value > 240 or value % 2):
+            raise ValueError("local advert interval must be 0 or an even value from 60 to 240")
+        return value
+
+
+class RepeaterConfigResult(BaseModel):
+    public_key: str
+    setting: RepeaterConfigSetting
+    previous_value: int
+    value: int
+    verified: bool
+    completed_at: datetime
+
+
 class DatabaseStatus(BaseModel):
     database_bytes: int = Field(ge=0)
     wal_bytes: int = Field(ge=0)
@@ -306,7 +345,3 @@ class SendMessageResult(BaseModel):
     message_id: int
     delivery_state: DeliveryState
     ack_code: str | None = None
-
-
-class RepeaterConfigRequest(BaseModel):
-    settings: dict[str, str | int | float | bool]

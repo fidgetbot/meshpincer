@@ -106,6 +106,23 @@ companion's full public key and checking that its permission byte matches the
 intended role. To reduce privileges later, rerun `setperm` from an already
 authenticated repeater admin with role `1` or `2`.
 
+## Agent-side ACL and configuration maintenance
+
+After the mutation tools have been deployed and explicitly allowed, an
+authorized operator can use `meshcore_repeater_acl_set` with the repeater's full
+public key, the target companion's full public key, and permission `0` through
+`3`. The daemon pre-reads the ACL, sends exactly one typed `setperm` command,
+and verifies the result with a second binary ACL snapshot. It records only the
+target's six-byte public-key prefix in audit events and refuses to change its
+own ACL entry. Use an independently authenticated admin client for deliberate
+self-demotion or recovery.
+
+`meshcore_repeater_configure` is similarly narrow. Its initial supported
+setting is `local_advert_interval_minutes`, accepting `0` (disabled) or even
+values from `60` through `240`. It reads the old value, changes it once, and
+requires a matching read-back. Restore the returned `previous_value` to roll
+the operation back. Neither tool accepts raw CLI text.
+
 ## Proven hardware behavior
 
 The first successful hardware repeater status response occurred after both the
