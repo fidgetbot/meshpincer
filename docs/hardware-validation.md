@@ -34,6 +34,27 @@ protocol even though the text command `get acl` remains serial-only. Public
 validation records only entry counts, truncated key prefixes, and permission
 bytes; it omits full public keys and site-specific identity.
 
+## Verified repeater configuration and bounded retry — 2026-09-25
+
+MeshPincer read a paired repeater's local zero-hop advert interval as disabled,
+then performed a reversible configuration proof: pre-read `0`, set `60`, verify
+`60`, wait through the mutation cooldown, restore `0`, and verify `0` again.
+The temporary 60-minute interval was restored within minutes, before it could
+schedule an advertisement.
+
+The RF path dropped several unacknowledged remote-CLI replies. The forward
+transaction required two attempts for its pre-read, two for its write, and one
+for its post-read. The rollback required one, three, and one respectively.
+Every successful result was correlated to the exact repeater and ephemeral
+response tag. The final read-back confirmed the original value was restored.
+
+This hardware proof validates the typed configuration transaction and the
+three-attempt ceiling. Retries occur only after a response timeout, use fresh
+timestamps because firmware suppresses same-timestamp duplicate CLI commands,
+and are limited to idempotent typed operations. No arbitrary CLI, password,
+radio-profile, identity, coordinate, reboot, or destructive operation was
+exposed or attempted.
+
 ## Wio Tracker L1 Pro — 2026-09-20
 
 The first read-only hardware inventory was performed against a Wio Tracker L1
